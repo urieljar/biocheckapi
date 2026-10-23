@@ -1,0 +1,71 @@
+services:
+  database:
+    image: postgres:16-alpine
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+
+    ports:
+      - "${DB_PORT}:5432"
+
+    volumes:
+      - asistencia_postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DB_USER} -d ${DB_NAME}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    restart: unless-stopped
+    init: true
+
+    env_file:
+      - .env
+
+    environment:
+      DB_HOST: database
+      DB_PORT: 5432
+      TZ: America/Mazatlan
+
+    ports:
+      - "${PORT}:3000"
+
+    depends_on:
+      database:
+        condition: service_healthy
+
+    volumes:
+      - .:/app
+      - api_node_modules:/app/node_modules
+
+    command: npm run dev -- --legacy-watch
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--spider",
+          "-q",
+          "http://localhost:3000/api/health"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  asistencia_postgres_data:
+  api_node_modules:
