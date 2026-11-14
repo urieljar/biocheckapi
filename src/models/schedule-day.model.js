@@ -32,6 +32,24 @@ const ScheduleDay = sequelize.define(
       defaultValue: true
     },
 
+    dayType: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'NORMAL',
+      validate: {
+        isIn: [['NORMAL', 'FLEXIBLE', 'REST']]
+      }
+    },
+
+    workMinutes: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      validate: {
+        min: 1,
+        max: 1440
+      }
+    },
+
     entryTime: {
       type: DataTypes.TIME,
       allowNull: true

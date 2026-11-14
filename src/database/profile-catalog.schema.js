@@ -1,8 +1,16 @@
 import sequelize from '../config/database.js';
 
+export const ensureProfileEmploymentSchema = async () => {
+  await sequelize.query(`ALTER TABLE "employee_profiles"
+    ADD COLUMN IF NOT EXISTS "employmentStatus" VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS "terminationDate" DATE,
+    ADD COLUMN IF NOT EXISTS "terminationReason" VARCHAR(255)`);
+};
+
 // Keeps local installations compatible with employee_profiles created before
 // the profile catalogs were normalized.
 export const ensureProfileCatalogSchema = async () => {
+  await ensureProfileEmploymentSchema();
   await sequelize.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
 
   await sequelize.query(`

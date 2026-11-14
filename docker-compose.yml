@@ -24,6 +24,39 @@ services:
       timeout: 5s
       retries: 5
 
+  database-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: database
+      PGPORT: 5432
+      PGDATABASE: ${DB_NAME}
+      PGUSER: ${DB_USER}
+      PGPASSWORD: ${DB_PASSWORD}
+    depends_on:
+      database:
+        condition: service_healthy
+    volumes:
+      - asistencia_postgres_backups:/backups
+    command: >-
+      sh -c "set -u; mkdir -p /backups/daily /backups/weekly /backups/monthly;
+      while true; do
+      stamp=$$(date +%Y%m%d-%H%M%S); day=$$(date +%u); dom=$$(date +%d);
+      tmp=/backups/daily/.biotime-$${stamp}.dump.tmp;
+      if pg_dump --format=custom --file=$$tmp; then
+        mv $$tmp /backups/daily/biotime-$${stamp}.dump;
+        cp /backups/daily/biotime-$${stamp}.dump /backups/weekly/biotime-week-$${stamp}.dump;
+        if [ \"$$dom\" = \"01\" ]; then cp /backups/daily/biotime-$${stamp}.dump /backups/monthly/biotime-month-$${stamp}.dump; fi;
+        echo \"$$(date -Iseconds) OK biotime-$${stamp}.dump\" >> /backups/backup.log;
+        find /backups/daily -type f -name '*.dump' -mtime +14 -delete;
+        if [ \"$$day\" = \"7\" ]; then find /backups/weekly -type f -name '*.dump' -mtime +90 -delete; fi;
+        if [ \"$$dom\" = \"01\" ]; then find /backups/monthly -type f -name '*.dump' -mtime +365 -delete; fi;
+      else
+        rm -f $$tmp;
+        echo \"$$(date -Iseconds) ERROR pg_dump\" >> /backups/backup.log;
+      fi;
+      sleep 86400; done"
+
   api:
     build:
       context: .
@@ -68,4 +101,5 @@ services:
 
 volumes:
   asistencia_postgres_data:
+  asistencia_postgres_backups:
   api_node_modules:

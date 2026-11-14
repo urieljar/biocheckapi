@@ -1,0 +1,196 @@
+BIOCHECK - SOLUCION DEL ERROR 502 CON TAILSCALE
+Fecha: 31 de octubre de 2026
+
+QUE OCURRIO Y QUE HICE
+=====================
+1. Consulte el servicio de Windows y el estado de Tailscale.
+   El servicio estaba iniciado, con inicio automatico y la VPN conectada.
+2. Revise Tailscale Serve. Seguía enviando solicitudes HTTPS a:
+   http://127.0.0.1:3001
+3. Revise el puerto 3001. No habia una API escuchando.
+   Esa fue la causa del 502: el proxy estaba disponible, pero su destino no.
+4. Cree src/scripts/start-integration-local.js para reiniciar la API usando
+   la credencial existente, sin cambiar la clave que ya utilizabas en Postman.
+5. Inicie ese script en segundo plano, con registros en la carpeta .local.
+6. Probe empleados y calculo mediante la direccion HTTPS de Tailscale.
+   Ambos devolvieron 200 OK. Sin credencial devolvio 401, como corresponde.
+
+COMO REPETIRLO PASO A PASO
+=========================
+
+PASO 1. ABRIR POWERSHELL Y ENTRAR AL PROYECTO
+
+Abre PowerShell y ejecuta:
+
+Set-Location C:\opencode\biotimeuriel\backend
+
+Todos los comandos siguientes se ejecutan desde esa carpeta.
+Si Windows indica falta de permisos al consultar o iniciar un servicio,
+abre PowerShell como administrador y repite solo ese comando.
+
+PASO 2. COMPROBAR TAILSCALE
+
+Get-Service Tailscale | Select-Object Status, StartType, Name
+
+Lo esperado es Status = Running.
+Si aparece Stopped, ejecuta en PowerShell como administrador:
+
+Start-Service Tailscale
+
+Despues consulta la conexion:
+
+& 'C:\Program Files\Tailscale\tailscale.exe' status
+
+Si solicita iniciar sesion, abre Tailscale desde Inicio o desde su icono
+junto al reloj de Windows e inicia sesion con tu cuenta.
+Tailscale puede estar funcionando sin mostrar una ventana principal.
+
+PASO 3. COMPROBAR EL PROXY PRIVADO
+
+& 'C:\Program Files\Tailscale\tailscale.exe' serve status
+
+La configuracion de este equipo debe indicar:
+
+https://it.tail03f3ec.ts.net (tailnet only)
+|-- / proxy http://127.0.0.1:3001
+
+Si no existe una configuracion Serve, restablecela con:
+
+& 'C:\Program Files\Tailscale\tailscale.exe' serve --bg http://127.0.0.1:3001
+
+Si muestra un enlace para habilitar Serve o HTTPS, abre ese enlace y completa
+el proceso con tu cuenta. No hace falta repetirlo si ya esta habilitado.
+La direccion anterior corresponde a este equipo y su red actuales.
+
+PASO 4. COMPROBAR POSTGRESQL
+
+Abre Docker Desktop y espera a que termine de iniciar.
+En PowerShell ejecuta:
+
+docker compose ps
+
+La base de datos debe estar iniciada. En esta instalacion se publica en el
+puerto 5433 del equipo y usa el puerto 5432 dentro del contenedor.
+Si la base esta detenida, inicia solamente ese servicio:
+
+docker compose up -d database
+
+El script local utiliza localhost:5433 y las credenciales DB de backend\.env.
+No es necesario modificar esas credenciales si la conexion ya funcionaba.
+
+PASO 5. COMPROBAR SI LA API YA ESTA INICIADA
+
+Get-NetTCPConnection -LocalPort 3001 -State Listen -ErrorAction SilentlyContinue
+
+Si aparece un proceso escuchando, no inicies otra copia. Pasa al paso 7.
+Si no aparece nada, inicia la API con UNA de las opciones del paso 6.
+
+PASO 6A. INICIO EN UNA TERMINAL VISIBLE (OPCION MAS SENCILLA)
+
+node src/scripts/start-integration-local.js
+
+Debe mostrar:
+API de integracion lista en puerto 3001
+
+Deja esa terminal abierta. Al cerrarla o detener Node, la API dejara de
+responder y el proxy podria volver a mostrar 502.
+Para detener este inicio voluntariamente, pulsa Ctrl+C.
+
+PASO 6B. INICIO EN SEGUNDO PLANO (ASI LO INICIE DURANTE LA REPARACION)
+
+Usa esta opcion en lugar de 6A, solamente si el puerto 3001 esta libre.
+Ejecuta el bloque completo:
+
+$integrationNode = (Get-Command node.exe).Source
+$integrationProcess = Start-Process -FilePath $integrationNode -ArgumentList 'src/scripts/start-integration-local.js' -WorkingDirectory 'C:\opencode\biotimeuriel\backend' -WindowStyle Hidden -RedirectStandardOutput 'C:\opencode\biotimeuriel\backend\.local\integration-server.stdout.log' -RedirectStandardError 'C:\opencode\biotimeuriel\backend\.local\integration-server.stderr.log' -PassThru
+$integrationProcess.Id
+
+El numero mostrado identifica el proceso creado. Esto no instala un servicio
+ni configura el inicio automatico al encender Windows.
+Comprueba otra vez el puerto antes de repetir el comando.
+
+Para revisar los mensajes del arranque:
+
+Get-Content .local\integration-server.stdout.log -Tail 20
+Get-Content .local\integration-server.stderr.log -Tail 20
+
+Si falla la conexion con PostgreSQL, revisa el paso 4.
+Si indica EADDRINUSE, el puerto ya esta ocupado: no sigas iniciando copias.
+
+PASO 7. PROBAR LA API LOCAL SIN MOSTRAR LA CLAVE
+
+Desde otra terminal PowerShell, ubicada en backend, ejecuta:
+
+$integrationCredentials = Get-Content .local\integration-demo.credentials.json -Raw | ConvertFrom-Json
+$integrationHeaders = @{ Authorization = "Bearer $($integrationCredentials.apiKey)" }
+$integrationEmployees = Invoke-RestMethod -Uri 'http://127.0.0.1:3001/api/integrations/v1/employees?limit=20' -Headers $integrationHeaders
+$integrationEmployees.ok
+$integrationEmployees.pagination
+
+Debe mostrar True y los datos de paginacion.
+La cantidad de empleados puede cambiar conforme se actualice tu base.
+
+PASO 8. PROBAR EL ACCESO HTTPS POR TAILSCALE
+
+En esa misma terminal ejecuta:
+
+$integrationVpnBase = 'https://it.tail03f3ec.ts.net/api/integrations/v1'
+$integrationVpnEmployees = Invoke-RestMethod -Uri "$integrationVpnBase/employees?limit=20" -Headers $integrationHeaders
+$integrationVpnEmployees.ok
+
+Debe mostrar True.
+
+Para probar el mismo calculo individual utilizado durante la reparacion:
+
+$integrationCalculation = Invoke-RestMethod -Uri "$integrationVpnBase/attendance-calculations/employees/4563570b-9833-43b1-81f6-feec6a240eb8?from=2026-10-01&to=2026-10-29" -Headers $integrationHeaders
+$integrationCalculation.data.summary
+
+El UUID corresponde a ABRIL en la base revisada. Si cambias de base o eliminas
+su ficha, utiliza el UUID obtenido en la consulta de empleados.
+El rango maximo por calculo es de 31 dias.
+
+PASO 9. PROBAR DESDE POSTMAN
+
+1. Abre la coleccion que ya utilizabas para la VPN.
+2. Verifica que baseUrl tenga:
+   https://it.tail03f3ec.ts.net/api/integrations/v1
+3. Verifica que la autenticacion de la solicitud herede la de la coleccion.
+   La coleccion utiliza Bearer Token con la variable apiKey.
+4. Ejecuta "1 - Consultar empleados". Debe responder 200 OK.
+5. Ejecuta "2 - Calcular asistencia". Debe responder 200 OK.
+
+Si necesitas importar nuevamente la coleccion, el archivo es:
+C:\opencode\biotimeuriel\backend\.local\integration-vpn.postman_collection.json
+
+Con el script start-integration-local.js no deberias cambiar la clave.
+Si anteriormente ejecutaste demo-integration.js, ese script genera otra clave;
+la coleccion VPN antigua podria necesitar actualizar su variable apiKey con
+la clave vigente de .local\integration-demo.credentials.json.
+Conserva esos archivos localmente: contienen la credencial de integracion.
+
+QUE SIGNIFICA CADA RESULTADO
+===========================
+200: consulta correcta.
+400: parametros invalidos; revisa fechas, identificador o rango.
+401: la API responde, pero falta la credencial o no coincide.
+404: empleado inexistente o ruta no publicada por la integracion.
+429: demasiadas consultas en un minuto; espera y vuelve a intentar.
+500: fallo dentro de la API; revisa Node y la conexion a PostgreSQL.
+502: el proxy no obtuvo una respuesta valida de la API local. En el incidente
+     revisado, Node no estaba ejecutandose en el puerto 3001.
+Sin conexion o error DNS: comprueba Tailscale, internet y la direccion utilizada.
+
+RECORDATORIOS
+=============
+- Tailscale y la API son procesos independientes. Tener la VPN conectada no
+  significa que Node este ejecutandose.
+- El nuevo script conserva la credencial. No uses demo-integration.js para
+  un reinicio normal, porque cambia la clave de la demostracion.
+- El piloto necesita la carpeta .local con sus credenciales existentes.
+- Si reinicias Windows, deberas iniciar la API otra vez. El inicio automatico
+  de la API todavia no esta configurado.
+- La computadora debe permanecer encendida y sin suspenderse.
+- La direccion HTTPS es privada de Tailscale. Un consumidor remoto debe estar
+  autorizado en la VPN y enviar tambien la credencial de la API.
+- Las comprobaciones de la reparacion se hicieron desde el equipo BioCheck;
+  no demuestran por si solas el acceso desde otro equipo o desde otra red.

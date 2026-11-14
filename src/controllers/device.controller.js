@@ -1,6 +1,20 @@
 import { testZktecoConnection } from '../services/zkteco.service.js';
 import { synchronizeEmployees } from '../services/employee-sync.service.js';
 import { synchronizeAttendances } from '../services/attendance-sync.service.js';
+import { verifyEmployeePresence } from '../services/employee-presence.service.js';
+
+export const checkEmployeePresence = async (_req, res) => {
+  try {
+    const data = await verifyEmployeePresence();
+    res.json({ ok: true, data });
+  } catch (error) {
+    console.error('Error al verificar empleados en el reloj:', error.message);
+    res.status(error.statusCode || 503).json({
+      ok: false,
+      message: error.statusCode ? error.message : 'No fue posible leer los usuarios del reloj. No se verificaron empleados.'
+    });
+  }
+};
 
 //tester de conexion con el reloj
 export const testConnection = async (req, res) => {

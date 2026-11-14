@@ -1,5 +1,13 @@
 import jwt from 'jsonwebtoken';
 import { User } from '../models/index.js';
+import { hasCapability } from '../security/roles.js';
+
+export const requireCapability = (capability) => (req, res, next) => {
+  if (!req.user?.active || !hasCapability(req.user.role, capability)) {
+    return res.status(403).json({ ok: false, message: 'No tienes permisos para esta operación' });
+  }
+  next();
+};
 
 export const authenticate = async (req, res, next) => {
   try {

@@ -32,7 +32,12 @@ const User = sequelize.define(
     role: {
       type: DataTypes.STRING,
       allowNull: false,
-      defaultValue: 'ADMIN'
+      defaultValue: 'CONSULTA',
+      validate: {
+        // USER se conserva para que las cuentas anteriores al catálogo sigan
+        // pudiendo guardarse hasta ejecutar `npm run migrate-roles`.
+        isIn: [['ROOT', 'ADMIN', 'SUPERVISOR', 'CONSULTA', 'USER']]
+      }
     },
 
     active: {

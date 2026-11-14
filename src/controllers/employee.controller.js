@@ -11,6 +11,9 @@ import {
   queueUpdateUserInfoCommand
 } from '../services/adms-command.service.js';
 import { writeEmployeeToDevice } from '../services/device-user-write.service.js';
+import { hasCapability } from '../security/roles.js';
+import { EmploymentPeriod } from '../models/index.js';
+import { validateEmploymentProfile } from '../services/profile-validation.service.js';
 
 const DEVICE_ROLES = new Set([0, 2, 8, 12, 14]);
 
@@ -80,6 +83,9 @@ const PROFILE_FIELDS = [
   'areaId',
   'employmentType',
   'hireDate',
+  'employmentStatus',
+  'terminationDate',
+  'terminationReason',
   'socialSecurityNumber',
   'passportNumber',
   'driverLicenseVehicle',
@@ -195,6 +201,10 @@ const findEmployeeByDeviceUid = async (
 
 const syncEmployeeToDevice = async (employee) => {
   try {
+    const laborProfile = await EmployeeProfile.findOne({ where: { employeeId: employee.id } });
+    if (laborProfile?.employmentStatus === 'TERMINATED') {
+      return { ok: false, error: new Error('Empleado dado de baja; no se envió al reloj') };
+    }
     const result = await writeEmployeeToDevice(employee);
 
     await employee.update({
@@ -446,6 +456,11 @@ export const createEmployeeProfile = async (req, res) => {
     }
 
     const profileData = buildProfileData(req.body);
+    if (profileData.employmentStatus && !hasCapability(req.user?.role, 'employee.status')) {
+      return res.status(403).json({ ok: false, message: 'No tienes permiso para registrar el estado laboral' });
+    }
+    const employmentError = validateEmploymentProfile(profileData);
+    if (employmentError) return res.status(400).json({ ok: false, message: employmentError });
     const catalogError = await validateProfileCatalogs(profileData);
 
     if (catalogError) {
@@ -496,7 +511,19 @@ export const updateEmployeeProfile = async (req, res) => {
       });
     }
 
+    const auditBefore = profile.get({ plain: true });
+
     const updates = buildProfileData(req.body);
+    if (['employmentStatus', 'terminationDate', 'terminationReason'].some((key) => updates[key] !== undefined && updates[key] !== (profile[key] ?? null)) && !hasCapability(req.user?.role, 'employee.status')) {
+      return res.status(403).json({ ok: false, message: 'No tienes permiso para cambiar el estado laboral' });
+    }
+    const laborFields = ['employmentStatus', 'hireDate', 'terminationDate', 'terminationReason'];
+    if (laborFields.some((key) => updates[key] !== undefined && updates[key] !== (profile[key] ?? null)) &&
+        await EmploymentPeriod.count({ where: { employeeId: employee.id } })) {
+      return res.status(409).json({ ok: false, message: 'El empleado tiene historial laboral. Utiliza las acciones de baja o reingreso para conservarlo.' });
+    }
+    const employmentError = validateEmploymentProfile(updates, profile.get({ plain: true }));
+    if (employmentError) return res.status(400).json({ ok: false, message: employmentError });
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({
@@ -515,6 +542,8 @@ export const updateEmployeeProfile = async (req, res) => {
     }
 
     await profile.update(updates);
+    req.auditBefore = auditBefore;
+    req.auditAfter = profile.get({ plain: true });
 
     res.json({
       ok: true,
@@ -538,6 +567,17 @@ export const updateEmployeeDeviceSettings = async (req, res) => {
       return res.status(404).json({
         ok: false,
         message: 'Empleado no encontrado'
+      });
+    }
+
+    const auditBefore = employee.get({ plain: true });
+
+    // Activar o desactivar a una persona es una decisión de supervisión, no de captura.
+    if (req.body.active !== undefined && !hasCapability(req.user?.role, 'employee.status')) {
+      return res.status(403).json({
+        ok: false,
+        message:
+          'Solo un administrador o supervisor puede activar o desactivar empleados'
       });
     }
 
@@ -660,6 +700,8 @@ export const updateEmployeeDeviceSettings = async (req, res) => {
     });
 
     const result = await getEmployeeById(employee.id);
+    req.auditBefore = auditBefore;
+    req.auditAfter = result;
 
     res.json({
       ok: true,
@@ -715,6 +757,9 @@ export const syncEmployeeToDeviceById = async (req, res) => {
         message: 'Empleado no encontrado'
       });
     }
+    const laborProfile = await EmployeeProfile.findOne({ where: { employeeId: employee.id } });
+    if (laborProfile?.employmentStatus === 'TERMINATED') return res.status(409).json({ ok: false, message: 'El empleado está dado de baja. Registra su reingreso antes de enviarlo al reloj.' });
+
 
     const syncResult = await syncEmployeeToDevice(employee);
     const result = await getEmployeeById(employee.id);
@@ -834,6 +879,9 @@ export const queueEmployeeAdmsSync = async (req, res) => {
         message: 'Empleado no encontrado'
       });
     }
+    const laborProfile = await EmployeeProfile.findOne({ where: { employeeId: employee.id } });
+    if (laborProfile?.employmentStatus === 'TERMINATED') return res.status(409).json({ ok: false, message: 'El empleado está dado de baja. Registra su reingreso antes de enviarlo al reloj.' });
+
 
     const command = await queueUpdateUserInfoCommand({
       device: employee.device,
@@ -902,9 +950,18 @@ export const getEmployees = async (req, res) => {
         }
       : {};
 
+    const laborStatus = req.query.laborStatus || 'ALL';
+    if (!['ALL', 'ACTIVE', 'TERMINATED', 'DELETED'].includes(laborStatus)) return res.status(400).json({ ok: false, message: 'Filtro laboral inválido' });
+    if (laborStatus === 'DELETED' && !hasCapability(req.user?.role, 'employee.delete')) return res.status(403).json({ ok: false, message: 'No tienes permiso para consultar registros eliminados' });
+    if (laborStatus === 'TERMINATED') where['$profile.employmentStatus$'] = 'TERMINATED';
+    if (laborStatus === 'ACTIVE') where[Op.and] = [{ [Op.or]: [{ '$profile.employmentStatus$': null }, { '$profile.employmentStatus$': { [Op.ne]: 'TERMINATED' } }] }];
+    if (laborStatus === 'DELETED') where.deletedAt = { [Op.ne]: null };
+
     const { count, rows } = await Employee.findAndCountAll({
       where,
+      paranoid: laborStatus !== 'DELETED',
       include: [
+        { model: EmployeeProfile, as: 'profile', attributes: ['employmentStatus', 'hireDate', 'terminationDate', 'terminationReason'] },
         {
           model: Device,
           as: 'device',

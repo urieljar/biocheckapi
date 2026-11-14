@@ -5,6 +5,7 @@ import {
   Employee,
   Device
 } from '../models/index.js';
+import { assertAttendancePeriodOpen } from '../services/payroll-closure.service.js';
 
 const TIME_ZONE = 'America/Mazatlan';
 
@@ -135,6 +136,128 @@ export const getAttendances = async (req, res) => {
     res.status(500).json({
       ok: false,
       message: 'No fue posible consultar las checadas'
+    });
+  }
+};
+
+
+export const createManualAttendance = async (req, res) => {
+  try {
+    const { employeeId, deviceUserId, date, time } = req.body;
+
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ ok: false, message: 'La fecha debe tener formato YYYY-MM-DD' });
+    }
+
+    if (!time || !/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(time)) {
+      return res.status(400).json({ ok: false, message: 'La hora debe tener formato HH:mm o HH:mm:ss' });
+    }
+
+    let employee = null;
+    if (employeeId) {
+      employee = await Employee.findByPk(employeeId);
+    } else if (deviceUserId) {
+      employee = await Employee.findOne({ where: { deviceUserId: String(deviceUserId) } });
+    }
+
+    if (!employee) {
+      return res.status(404).json({ ok: false, message: 'Empleado no encontrado' });
+    }
+
+    let deviceId = employee.deviceId;
+    if (!deviceId) {
+      const defaultDevice = await Device.findOne();
+      if (!defaultDevice) {
+        return res.status(400).json({ ok: false, message: 'No hay dispositivo reloj configurado' });
+      }
+      deviceId = defaultDevice.id;
+    }
+
+    const formattedTime = time.length === 5 ? `${time}:00` : time;
+    // Hora local en zona America/Mazatlan (-07:00 todo el año)
+    const recordTime = new Date(`${date}T${formattedTime}-07:00`);
+
+    if (Number.isNaN(recordTime.getTime())) {
+      return res.status(400).json({ ok: false, message: 'Fecha u hora no válida' });
+    }
+
+    await assertAttendancePeriodOpen({ employeeId: employee.id, date, transaction: undefined });
+
+    const existing = await Attendance.findOne({
+      where: {
+        deviceId,
+        deviceUserId: String(employee.deviceUserId),
+        recordTime
+      }
+    });
+
+    if (existing) {
+      return res.status(409).json({
+        ok: false,
+        message: `Ya existe un registro de checada exactamente a las ${formattedTime} para este colaborador`
+      });
+    }
+
+    const row = await Attendance.create({
+      deviceId,
+      employeeId: employee.id,
+      deviceUserId: String(employee.deviceUserId),
+      deviceUserSn: employee.deviceUserSn || null,
+      recordTime,
+      deviceIp: 'MANUAL',
+      source: 'MANUAL'
+    });
+
+    res.status(201).json({
+      ok: true,
+      message: `Checada manual registrada exitosamente para ${employee.name} (${date} ${formattedTime})`,
+      data: {
+        id: row.id,
+        employeeId: row.employeeId,
+        deviceUserId: row.deviceUserId,
+        recordTime: row.recordTime,
+        recordTimeLocal: formatLocalTime(row.recordTime),
+        source: row.source
+      }
+    });
+  } catch (error) {
+    console.error('Error al registrar checada manual:', error.message);
+    res.status(500).json({
+      ok: false,
+      message: error.message || 'No fue posible registrar la checada manual'
+    });
+  }
+};
+
+export const deleteManualAttendance = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const row = await Attendance.findByPk(id);
+
+    if (!row) {
+      return res.status(404).json({ ok: false, message: 'Registro de checada no encontrado' });
+    }
+
+    if (row.source !== 'MANUAL') {
+      return res.status(403).json({
+        ok: false,
+        message: 'Solo se pueden eliminar checadas registradas manualmente. Las checadas biométricas del reloj checador están protegidas contra borrado.'
+      });
+    }
+
+    await assertAttendancePeriodOpen({ employeeId: row.employeeId, date: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Mazatlan' }).format(new Date(row.recordTime)), transaction: undefined });
+
+    await row.destroy();
+
+    res.json({
+      ok: true,
+      message: 'Checada manual eliminada correctamente'
+    });
+  } catch (error) {
+    console.error('Error al eliminar checada manual:', error.message);
+    res.status(500).json({
+      ok: false,
+      message: error.message || 'No fue posible eliminar la checada manual'
     });
   }
 };

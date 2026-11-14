@@ -44,7 +44,10 @@ const Attendance = sequelize.define(
       type: DataTypes.STRING,
       allowNull: false,
       defaultValue: 'DEVICE'
-    }
+    },
+    reviewedAt: { type: DataTypes.DATE, allowNull: true },
+    reviewedBy: { type: DataTypes.UUID, allowNull: true },
+    reviewReason: { type: DataTypes.STRING, allowNull: true }
   },
   {
     tableName: 'attendances',

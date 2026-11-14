@@ -30,7 +30,14 @@ const createAdmin = async () => {
     });
 
     if (existingUser) {
-      console.log('El administrador ya existe');
+      if (existingUser.role === 'ROOT') {
+        console.log('La cuenta ROOT ya existe');
+        return;
+      }
+
+      // La cuenta existía con otro rol: este script es la vía para crear al propietario.
+      await existingUser.update({ role: 'ROOT', active: true });
+      console.log(`${email} ya existía y ahora tiene rol ROOT`);
       return;
     }
 
@@ -40,11 +47,11 @@ const createAdmin = async () => {
       name,
       email,
       passwordHash,
-      role: 'ADMIN',
+      role: 'ROOT',
       active: true
     });
 
-    console.log('Administrador creado correctamente');
+    console.log('Cuenta ROOT (propietario del sistema) creada correctamente');
   } catch (error) {
     console.error('Error:', error.message);
     process.exitCode = 1;

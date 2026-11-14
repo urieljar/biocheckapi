@@ -4,6 +4,10 @@ import app from './app.js';
 import sequelize from './config/database.js';
 import './models/index.js';
 import { ensureProfileCatalogSchema } from './database/profile-catalog.schema.js';
+import { ensureWorkScheduleSchema } from './database/work-schedule.schema.js';
+import { ensureEmployeeLifecycleSchema } from './database/employee-lifecycle.schema.js';
+import { ensureReportSchema } from './database/report.schema.js';
+import { ensureAuditSchema } from './database/audit.schema.js';
 
 import { startZktecoSyncJobs, stopZktecoSyncJobs } from './jobs/zkteco-sync.job.js';
 
@@ -18,7 +22,11 @@ const startServer = async () => {
     );
 
     await sequelize.sync();
+    await ensureEmployeeLifecycleSchema();
+    await ensureReportSchema();
+    await ensureAuditSchema();
     await ensureProfileCatalogSchema();
+    await ensureWorkScheduleSchema();
 
     console.log('Modelos sincronizados correctamente');
 

@@ -10,6 +10,14 @@ import EmployeeProfile from './employee-profile.model.js';
 import Department from './department.model.js';
 import Area from './area.model.js';
 import Position from './position.model.js';
+import CalendarException from './calendar-exception.model.js';
+import SystemSetting from './system-setting.model.js';
+import EmploymentPeriod from './employment-period.model.js';
+import AuditLog from './audit-log.model.js';
+import PayrollClosure from './payroll-closure.model.js';
+
+Employee.hasMany(EmploymentPeriod, { foreignKey: 'employeeId', as: 'employmentPeriods' });
+EmploymentPeriod.belongsTo(Employee, { foreignKey: 'employeeId', as: 'employee' });
 
 Device.hasMany(Employee, {
   foreignKey: 'deviceId',
@@ -20,6 +28,8 @@ Employee.belongsTo(Device, {
   foreignKey: 'deviceId',
   as: 'device'
 });
+
+AuditLog.belongsTo(User, { foreignKey: 'actorId', as: 'actor' });
 
 Device.hasMany(Attendance, {
   foreignKey: 'deviceId',
@@ -154,6 +164,46 @@ Position.belongsTo(Position, {
   as: 'parent'
 });
 
+Employee.hasMany(CalendarException, {
+  foreignKey: 'employeeId',
+  as: 'calendarExceptions'
+});
+
+CalendarException.belongsTo(Employee, {
+  foreignKey: 'employeeId',
+  as: 'employee'
+});
+
+Department.hasMany(CalendarException, {
+  foreignKey: 'departmentId',
+  as: 'calendarExceptions'
+});
+
+CalendarException.belongsTo(Department, {
+  foreignKey: 'departmentId',
+  as: 'department'
+});
+
+Area.hasMany(CalendarException, {
+  foreignKey: 'areaId',
+  as: 'calendarExceptions'
+});
+
+CalendarException.belongsTo(Area, {
+  foreignKey: 'areaId',
+  as: 'area'
+});
+
+WorkSchedule.hasMany(CalendarException, {
+  foreignKey: 'scheduleId',
+  as: 'calendarExceptions'
+});
+
+CalendarException.belongsTo(WorkSchedule, {
+  foreignKey: 'scheduleId',
+  as: 'schedule'
+});
+
 WorkSchedule.hasMany(EmployeeSchedule, {
   foreignKey: 'scheduleId',
   as: 'employeeAssignments'
@@ -176,5 +226,10 @@ export {
   EmployeeProfile,
   Department,
   Area,
-  Position
+  Position,
+  CalendarException,
+  SystemSetting,
+  EmploymentPeriod,
+  AuditLog,
+  PayrollClosure
 };

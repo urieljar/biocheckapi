@@ -88,11 +88,13 @@ const Employee = sequelize.define(
     active: {
       type: DataTypes.BOOLEAN,
       defaultValue: true
-    }
+    },
+    deletedBy: DataTypes.UUID
   },
   {
     tableName: 'employees',
     timestamps: true,
+    paranoid: true,
     indexes: [
       {
         unique: true,

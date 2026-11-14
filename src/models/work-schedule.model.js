@@ -21,6 +21,24 @@ const WorkSchedule = sequelize.define(
       allowNull: true
     },
 
+    type: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'NORMAL',
+      validate: {
+        isIn: [['NORMAL', 'FLEXIBLE', 'MIXED']]
+      }
+    },
+
+    workMinutes: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      validate: {
+        min: 1,
+        max: 1440
+      }
+    },
+
     timeZone: {
       type: DataTypes.STRING,
       allowNull: false,

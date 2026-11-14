@@ -1,5 +1,6 @@
 import { Op } from 'sequelize';
 import { Device, DeviceCommand, Employee } from '../models/index.js';
+import { redactCommandPin } from '../middlewares/device-pin.middleware.js';
 
 const ADMS_COMMAND_TIMEOUT_MINUTES = 10;
 const ADMS_COMMAND_TIMEOUT_MESSAGE =
@@ -169,7 +170,7 @@ export const admsGetRequest = async (req, res) => {
     commandId: command.commandId,
     serialNumber,
     preview,
-    command: command.command
+    command: redactCommandPin(command.command)
   });
 
   res

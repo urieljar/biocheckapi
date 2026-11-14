@@ -87,14 +87,6 @@ export const getZktecoAttendances = async () => {
 };
 
 
-
-
-
-
-
-
-
-
 // import ZKLib from 'node-zklib';
 
 // const createDevice = () => {
