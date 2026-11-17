@@ -7,12 +7,19 @@ import {
 import {
   synchronizeAttendances
 } from '../services/attendance-sync.service.js';
+import {
+  failSyncJob,
+  finishSyncJob,
+  setSyncJobEnabled,
+  startSyncJob
+} from '../services/sync-status.service.js';
 
 let syncRunning = false;
 let jobsStarted = false;
 const scheduledTasks = [];
 
 const executeSync = async (name, syncFunction) => {
+  const statusName = name.includes('empleados') ? 'employees' : 'attendances';
   if (syncRunning) {
     console.log(
       `[CRON] ${name} omitida: existe otra sincronización en proceso`
@@ -21,14 +28,17 @@ const executeSync = async (name, syncFunction) => {
   }
 
   syncRunning = true;
+  startSyncJob(statusName);
 
   try {
     console.log(`[CRON] Iniciando ${name}`);
 
     const result = await syncFunction();
+    finishSyncJob(statusName, result);
 
     console.log(`[CRON] ${name} completada`, result);
   } catch (error) {
+    failSyncJob(statusName, error);
     console.error(
       `[CRON] Error durante ${name}:`,
       error.message
@@ -44,9 +54,14 @@ export const startZktecoSyncJobs = () => {
   }
 
   if (process.env.SYNC_JOBS_ENABLED !== 'true') {
+    setSyncJobEnabled('employees', false);
+    setSyncJobEnabled('attendances', false);
     console.log('[CRON] Sincronización automática deshabilitada');
     return;
   }
+
+  setSyncJobEnabled('employees', true);
+  setSyncJobEnabled('attendances', true);
 
   const timeZone =
     process.env.CRON_TIME_ZONE || 'America/Mazatlan';

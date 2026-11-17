@@ -8,8 +8,10 @@ import { ensureWorkScheduleSchema } from './database/work-schedule.schema.js';
 import { ensureEmployeeLifecycleSchema } from './database/employee-lifecycle.schema.js';
 import { ensureReportSchema } from './database/report.schema.js';
 import { ensureAuditSchema } from './database/audit.schema.js';
+import { runMigrations } from './database/migration-runner.js';
 
 import { startZktecoSyncJobs, stopZktecoSyncJobs } from './jobs/zkteco-sync.job.js';
+import { startDeviceMonitor, stopDeviceMonitor } from './jobs/device-monitor.job.js';
 
 const PORT = process.env.PORT || 3000;
 
@@ -21,7 +23,8 @@ const startServer = async () => {
       'Conexión con PostgreSQL establecida correctamente'
     );
 
-    await sequelize.sync();
+    if (process.env.DB_SYNC !== 'false') await sequelize.sync();
+    await runMigrations();
     await ensureEmployeeLifecycleSchema();
     await ensureReportSchema();
     await ensureAuditSchema();
@@ -31,6 +34,7 @@ const startServer = async () => {
     console.log('Modelos sincronizados correctamente');
 
     startZktecoSyncJobs();
+    startDeviceMonitor();
 
     app.listen(PORT, '0.0.0.0', () => {
       console.log(
@@ -48,6 +52,7 @@ const shutdown = async () => {
   console.log('Cerrando servidor...');
 
   stopZktecoSyncJobs();
+  stopDeviceMonitor();
   await sequelize.close();
 
   process.exit(0);

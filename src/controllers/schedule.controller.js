@@ -79,8 +79,16 @@ const validateDays = (days, scheduleType, scheduleWorkMinutes) => {
     if (scheduleType !== 'MIXED' && isWorkDay && dayType !== scheduleType) {
       return `El día ${dayNumber} debe usar dayType ${scheduleType}`;
     }
-    if (isWorkDay && (!TIME_PATTERN.test(day.entryTime || '') || !TIME_PATTERN.test(day.exitTime || ''))) {
+    if (isWorkDay && dayType === 'NORMAL' && (!TIME_PATTERN.test(day.entryTime || '') || !TIME_PATTERN.test(day.exitTime || ''))) {
       return `El día ${dayNumber} necesita una hora de entrada y salida válida`;
+    }
+    if (isWorkDay && dayType === 'FLEXIBLE') {
+      if (day.entryTime && !TIME_PATTERN.test(day.entryTime)) {
+        return `El día ${dayNumber} tiene una hora de entrada inválida`;
+      }
+      if (day.exitTime && !TIME_PATTERN.test(day.exitTime)) {
+        return `El día ${dayNumber} tiene una hora de salida inválida`;
+      }
     }
     if (isWorkDay && dayType === 'FLEXIBLE' && (!Number.isInteger(Number(dayWorkMinutes)) || Number(dayWorkMinutes) < 1 || Number(dayWorkMinutes) > 1440)) {
       return `El día ${dayNumber} necesita workMinutes entre 1 y 1440`;
@@ -104,8 +112,8 @@ const buildScheduleDays = (scheduleId, days, scheduleType, scheduleWorkMinutes) 
     workMinutes: isWorkDay && dayType === 'FLEXIBLE'
       ? Number(day.workMinutes ?? scheduleWorkMinutes)
       : null,
-    entryTime: isWorkDay ? day.entryTime : null,
-    exitTime: isWorkDay ? day.exitTime : null,
+    entryTime: isWorkDay ? (day.entryTime || null) : null,
+    exitTime: isWorkDay ? (day.exitTime || null) : null,
     crossesMidnight: isWorkDay && day.crossesMidnight === true
   };
 });

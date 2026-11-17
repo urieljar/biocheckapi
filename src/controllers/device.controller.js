@@ -2,6 +2,7 @@ import { testZktecoConnection } from '../services/zkteco.service.js';
 import { synchronizeEmployees } from '../services/employee-sync.service.js';
 import { synchronizeAttendances } from '../services/attendance-sync.service.js';
 import { verifyEmployeePresence } from '../services/employee-presence.service.js';
+import { failSyncJob, finishSyncJob, startSyncJob } from '../services/sync-status.service.js';
 
 export const checkEmployeePresence = async (_req, res) => {
   try {
@@ -39,8 +40,10 @@ export const testConnection = async (req, res) => {
 
 //sincronizacion de empleados
 export const syncEmployees = async (req, res) => {
+  startSyncJob('employees');
   try {
     const result = await synchronizeEmployees();
+    finishSyncJob('employees', result);
 
     res.json({
       ok: true,
@@ -48,6 +51,7 @@ export const syncEmployees = async (req, res) => {
       data: result
     });
   } catch (error) {
+    failSyncJob('employees', error);
     console.error('Error al sincronizar empleados:', error.message);
 
     res.status(500).json({
@@ -60,8 +64,10 @@ export const syncEmployees = async (req, res) => {
 
 //sincronizacion de checadas
 export const syncAttendances = async (req, res) => {
+  startSyncJob('attendances');
   try {
     const result = await synchronizeAttendances();
+    finishSyncJob('attendances', result);
 
     res.json({
       ok: true,
@@ -69,6 +75,7 @@ export const syncAttendances = async (req, res) => {
       data: result
     });
   } catch (error) {
+    failSyncJob('attendances', error);
     console.error(
       'Error al sincronizar checadas:',
       error.message

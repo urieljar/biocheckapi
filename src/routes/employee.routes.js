@@ -13,6 +13,7 @@ import {
 } from '../controllers/employee.controller.js';
 import { requireCapability } from '../middlewares/auth.middleware.js';
 import { terminate, rehire, archive, restore, employmentHistory } from '../controllers/employee-lifecycle.controller.js';
+import { getEmployeeSyncStatus } from '../controllers/employee-sync-status.controller.js';
 
 const router = Router();
 
@@ -20,6 +21,7 @@ const router = Router();
 router.get('/', getEmployees);
 router.post('/', requireCapability('employee.write'), createEmployee);
 router.post('/sync-pending-to-device', requireCapability('employee.write'), syncPendingEmployeesToDevice);
+router.get('/:id/sync-status', getEmployeeSyncStatus);
 router.get('/:id', getEmployee);
 router.post('/:id/termination', requireCapability('employee.status'), terminate);
 router.post('/:id/rehire', requireCapability('employee.status'), rehire);

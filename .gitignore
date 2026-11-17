@@ -3,6 +3,7 @@ node_modules/
 npm-debug.log*
 .vscode
 .local/
+logs/
 INSTRUCCIONES_SOLUCION_502_TAILSCALE.txt
 RESPALDO_RECUPERACION.md
 AUDITORIA.md

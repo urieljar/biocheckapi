@@ -100,3 +100,125 @@ y un proxy que publique únicamente este proceso, manteniendo privados los puert
 de PostgreSQL, la API interna y ADMS. La clave se guarda en el backend consumidor.
 Si se requieren varios consumidores o acceso por departamento/empleado, hay que
 añadir credenciales y autorizaciones independientes antes de compartirla.
+
+Para generar una credencial nueva de lectura:
+
+```powershell
+node src/scripts/generate-integration-read-key.js
+```
+
+Agrega el hash mostrado como `INTEGRATION_API_KEY_SHA256` en `.env`, reinicia
+el servicio `integration` y usa el `apiKey` de
+`.local/integration-read.credentials.json` en Postman.
+
+## Contrato v2 de escritura
+
+La v2 está separada de la v1 y permite administrar empleados desde un sistema
+consumidor. Usa una credencial distinta: configura
+`INTEGRATION_WRITE_API_KEY_SHA256` en el servidor y genera la pareja con:
+
+```powershell
+node src/scripts/generate-integration-write-key.js
+```
+
+La clave queda en `.local/integration-write.credentials.json`; el hash va en
+`.env`. Todas las mutaciones requieren `Authorization: Bearer <clave>` y
+quedan registradas en la auditoría con estado anterior y nuevo.
+
+```http
+GET  /api/integrations/v2/departments
+GET  /api/integrations/v2/positions
+GET  /api/integrations/v2/areas
+POST /api/integrations/v2/departments
+PATCH /api/integrations/v2/departments/:id
+DELETE /api/integrations/v2/departments/:id
+POST /api/integrations/v2/positions
+PATCH /api/integrations/v2/positions/:id
+DELETE /api/integrations/v2/positions/:id
+POST /api/integrations/v2/areas
+PATCH /api/integrations/v2/areas/:id
+DELETE /api/integrations/v2/areas/:id
+POST /api/integrations/v2/employees
+PATCH /api/integrations/v2/employees/:employeeId
+POST /api/integrations/v2/employees/:employeeId/terminate
+POST /api/integrations/v2/employees/:employeeId/reactivate
+```
+
+Los tres endpoints de catálogo devuelven únicamente elementos activos con
+`id`, `code`, `name` y `parentId`. Úsalos para obtener los identificadores o
+confirmar los nombres antes de enviar un empleado.
+
+Para crear un catálogo envía `code`, `name` y opcionalmente `parentId`.
+`PATCH` modifica esos campos o `active`. `DELETE` no borra físicamente: marca
+el catálogo como inactivo para conservar historiales.
+
+Alta mínima:
+
+```json
+{
+  "deviceUserId": "108070050",
+  "name": "NOMBRE COMPLETO",
+  "firstName": "NOMBRE",
+  "lastName": "APELLIDOS",
+  "employeeNumber": "108070050",
+  "department": "Operación",
+  "cargo": "Anfitrión",
+  "area": "Discovery",
+  "hireDate": "2026-11-16",
+  "employmentType": "Planta"
+}
+```
+
+Actualización: envía solo los campos que deben cambiar. La baja requiere
+`date` y `reason`; la reactivación requiere una fecha posterior a la última
+baja.
+
+`department`, `cargo`/`position` y `area` aceptan UUID, código o nombre exacto
+de un catálogo activo. También puedes enviar directamente `departmentId`,
+`positionId` y `areaId`.
+
+La v2 no elimina físicamente empleados ni registra checadas manuales. Las
+altas y cambios quedan `PENDING` para que el proceso normal los sincronice al
+reloj; la API externa no se conecta directamente al dispositivo.
+
+## Horarios en v2
+
+```http
+GET    /api/integrations/v2/schedules
+GET    /api/integrations/v2/schedules/:id
+POST   /api/integrations/v2/schedules
+PATCH  /api/integrations/v2/schedules/:id
+DELETE /api/integrations/v2/schedules/:id
+POST   /api/integrations/v2/schedules/:scheduleId/assign
+GET    /api/integrations/v2/employees/:employeeId/schedules
+GET    /api/integrations/v2/employees/:employeeId/sync-status
+```
+
+Para crear o actualizar un horario envía `name`, `type`, `toleranceMinutes` y
+los siete elementos de `days` (`dayOfWeek` del 0 al 6). Para asignarlo envía
+`employeeIds` y `validFrom` con formato `YYYY-MM-DD`. Un empleado dado de baja
+no puede recibir horarios; `DELETE` desactiva el horario y no lo borra si tiene
+asignaciones activas.
+
+`sync-status` es de solo lectura y usa el token de lectura. Devuelve `PENDING`,
+`SYNCED` o `ERROR`, junto con `syncedAt`, el último error y el reloj asociado.
+`SYNCED` significa que el usuario fue reconciliado por la sincronización; no es
+una confirmación de que una huella o rostro concreto haya sido aceptado.
+
+## Cálculo de asistencia completo en v1
+
+La integración v1 es de solo lectura y usa el mismo motor de cálculo que el
+frontend. Ahora expone el detalle completo para un empleado, toda la empresa o
+un departamento:
+
+```http
+GET /api/integrations/v1/attendance-calculations/employees/:employeeId?from=2026-11-01&to=2026-11-17
+GET /api/integrations/v1/attendance-calculations/company?from=2026-11-01&to=2026-11-17
+GET /api/integrations/v1/attendance-calculations/departments/:departmentId?from=2026-11-01&to=2026-11-17
+```
+
+Cada día incluye `rule` (horario aplicado), `exception` (permiso, vacaciones,
+incapacidad u otra incidencia), `punchDetails` (id, hora, fecha original y
+origen), `punches`, estado, motivo y minutos trabajados. Los resultados masivos
+incluyen el resumen de cada empleado y el resumen global. El rango está limitado
+a 31 días por consulta.

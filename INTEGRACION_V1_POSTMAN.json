@@ -1,0 +1,139 @@
+{
+  "info": {
+    "_postman_id": "b5f1c6a0-0f2e-4c34-9b4c-5f2fd1a10001",
+    "name": "BioCheck - Integración v1 lectura",
+    "description": "Colección de solo lectura para empleados, checadas y cálculo de asistencias. Configura las variables antes de compartirla con el equipo.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{readToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3001/api/integrations/v1" },
+    { "key": "readToken", "value": "" },
+    { "key": "employeeId", "value": "UUID_DEL_EMPLEADO" },
+    { "key": "departmentId", "value": "UUID_DEL_DEPARTAMENTO" },
+    { "key": "from", "value": "2026-11-01" },
+    { "key": "to", "value": "2026-11-17" },
+    { "key": "sinceId", "value": "0" },
+    { "key": "limit", "value": "50" },
+    { "key": "employeeNumber", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Empleados",
+      "item": [
+        {
+          "name": "Listar empleados",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/employees?page=1&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["employees"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Obtener un empleado",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/employees/{{employeeId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["employees", "{{employeeId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Checadas",
+      "item": [
+        {
+          "name": "Consultar checadas por cursor",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/attendance-events?sinceId={{sinceId}}&limit={{limit}}&employeeNumber={{employeeNumber}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance-events"],
+              "query": [
+                { "key": "sinceId", "value": "{{sinceId}}" },
+                { "key": "limit", "value": "{{limit}}" },
+                { "key": "employeeNumber", "value": "{{employeeNumber}}", "disabled": true }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cálculo de asistencias",
+      "item": [
+        {
+          "name": "Cálculo de un empleado",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/attendance-calculations/employees/{{employeeId}}?from={{from}}&to={{to}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance-calculations", "employees", "{{employeeId}}"],
+              "query": [
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cálculo de toda la empresa",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/attendance-calculations/company?from={{from}}&to={{to}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance-calculations", "company"],
+              "query": [
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cálculo por departamento",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/attendance-calculations/departments/{{departmentId}}?from={{from}}&to={{to}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance-calculations", "departments", "{{departmentId}}"],
+              "query": [
+                { "key": "from", "value": "{{from}}" },
+                { "key": "to", "value": "{{to}}" }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

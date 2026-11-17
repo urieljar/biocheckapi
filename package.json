@@ -24,6 +24,7 @@
     "dev": "nodemon src/server.js",
     "create-admin": "node src/scripts/create-admin.js",
     "migrate-roles": "node src/scripts/migrate-roles.js",
+    "migrate": "node src/scripts/run-migrations.js",
     "sync-pending-employees": "node src/scripts/sync-pending-employees-to-device.js"
   },
   "keywords": [],

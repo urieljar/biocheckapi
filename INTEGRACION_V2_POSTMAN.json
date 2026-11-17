@@ -1,0 +1,63 @@
+{
+  "info": {
+    "_postman_id": "c8a6b3b4-6d0e-4c63-9c6d-3f1f7d8b2002",
+    "name": "BioCheck - Integración v2 completa",
+    "description": "Endpoints v2 de lectura y escritura para catálogos, empleados, horarios y estado de sincronización. Configura readToken y writeToken antes de compartir la colección.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{readToken}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3001/api/integrations/v2" },
+    { "key": "readToken", "value": "" },
+    { "key": "writeToken", "value": "" },
+    { "key": "departmentId", "value": "UUID_DEL_DEPARTAMENTO" },
+    { "key": "positionId", "value": "UUID_DEL_CARGO" },
+    { "key": "areaId", "value": "UUID_DEL_AREA" },
+    { "key": "employeeId", "value": "UUID_DEL_EMPLEADO" },
+    { "key": "scheduleId", "value": "UUID_DEL_HORARIO" }
+  ],
+  "item": [
+    {
+      "name": "Catálogos",
+      "item": [
+        { "name": "Listar departamentos", "request": { "method": "GET", "url": "{{baseUrl}}/departments" } },
+        { "name": "Crear departamento", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"code\": \"OPERACION\",\n  \"name\": \"Operación\"\n}" }, "url": "{{baseUrl}}/departments" } },
+        { "name": "Actualizar departamento", "request": { "method": "PATCH", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"name\": \"Operación actualizada\",\n  \"active\": true\n}" }, "url": "{{baseUrl}}/departments/{{departmentId}}" } },
+        { "name": "Desactivar departamento", "request": { "method": "DELETE", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }], "url": "{{baseUrl}}/departments/{{departmentId}}" } },
+        { "name": "Listar cargos", "request": { "method": "GET", "url": "{{baseUrl}}/positions" } },
+        { "name": "Crear cargo", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"code\": \"ANFITRION\",\n  \"name\": \"Anfitrión\"\n}" }, "url": "{{baseUrl}}/positions" } },
+        { "name": "Actualizar cargo", "request": { "method": "PATCH", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"name\": \"Anfitrión actualizado\",\n  \"active\": true\n}" }, "url": "{{baseUrl}}/positions/{{positionId}}" } },
+        { "name": "Desactivar cargo", "request": { "method": "DELETE", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }], "url": "{{baseUrl}}/positions/{{positionId}}" } },
+        { "name": "Listar áreas", "request": { "method": "GET", "url": "{{baseUrl}}/areas" } },
+        { "name": "Crear área", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"code\": \"DISCOVERY\",\n  \"name\": \"Discovery\"\n}" }, "url": "{{baseUrl}}/areas" } },
+        { "name": "Actualizar área", "request": { "method": "PATCH", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"name\": \"Discovery actualizada\",\n  \"active\": true\n}" }, "url": "{{baseUrl}}/areas/{{areaId}}" } },
+        { "name": "Desactivar área", "request": { "method": "DELETE", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }], "url": "{{baseUrl}}/areas/{{areaId}}" } }
+      ]
+    },
+    {
+      "name": "Empleados",
+      "item": [
+        { "name": "Crear empleado", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"deviceUserId\": \"108070099\",\n  \"name\": \"PRUEBA INTEGRACION V2\",\n  \"firstName\": \"PRUEBA\",\n  \"lastName\": \"INTEGRACION V2\",\n  \"departmentId\": \"{{departmentId}}\",\n  \"positionId\": \"{{positionId}}\",\n  \"areaId\": \"{{areaId}}\",\n  \"hireDate\": \"2026-11-16\",\n  \"employmentType\": \"Planta\"\n}" }, "url": "{{baseUrl}}/employees" } },
+        { "name": "Actualizar empleado", "request": { "method": "PATCH", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"name\": \"PRUEBA ACTUALIZADA\",\n  \"departmentId\": \"{{departmentId}}\",\n  \"positionId\": \"{{positionId}}\",\n  \"areaId\": \"{{areaId}}\"\n}" }, "url": "{{baseUrl}}/employees/{{employeeId}}" } },
+        { "name": "Dar de baja empleado", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"date\": \"2026-11-16\",\n  \"reason\": \"Renuncia\",\n  \"notes\": \"Prueba de integración\"\n}" }, "url": "{{baseUrl}}/employees/{{employeeId}}/terminate" } },
+        { "name": "Reactivar empleado", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"date\": \"2026-11-17\",\n  \"notes\": \"Prueba de reingreso\"\n}" }, "url": "{{baseUrl}}/employees/{{employeeId}}/reactivate" } },
+        { "name": "Consultar estado de sincronización", "request": { "method": "GET", "url": "{{baseUrl}}/employees/{{employeeId}}/sync-status" } },
+        { "name": "Consultar horarios del empleado", "request": { "method": "GET", "url": "{{baseUrl}}/employees/{{employeeId}}/schedules" } }
+      ]
+    },
+    {
+      "name": "Horarios",
+      "item": [
+        { "name": "Listar horarios", "request": { "method": "GET", "url": "{{baseUrl}}/schedules" } },
+        { "name": "Obtener horario", "request": { "method": "GET", "url": "{{baseUrl}}/schedules/{{scheduleId}}" } },
+        { "name": "Crear horario normal", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"name\": \"Horario de operación\",\n  \"type\": \"NORMAL\",\n  \"toleranceMinutes\": 10,\n  \"timeZone\": \"America/Mazatlan\",\n  \"days\": [\n    {\"dayOfWeek\": 0, \"isWorkDay\": false, \"dayType\": \"REST\"},\n    {\"dayOfWeek\": 1, \"isWorkDay\": true, \"dayType\": \"NORMAL\", \"entryTime\": \"09:00\", \"exitTime\": \"18:00\"},\n    {\"dayOfWeek\": 2, \"isWorkDay\": true, \"dayType\": \"NORMAL\", \"entryTime\": \"09:00\", \"exitTime\": \"18:00\"},\n    {\"dayOfWeek\": 3, \"isWorkDay\": true, \"dayType\": \"NORMAL\", \"entryTime\": \"09:00\", \"exitTime\": \"18:00\"},\n    {\"dayOfWeek\": 4, \"isWorkDay\": true, \"dayType\": \"NORMAL\", \"entryTime\": \"09:00\", \"exitTime\": \"18:00\"},\n    {\"dayOfWeek\": 5, \"isWorkDay\": true, \"dayType\": \"NORMAL\", \"entryTime\": \"09:00\", \"exitTime\": \"18:00\"},\n    {\"dayOfWeek\": 6, \"isWorkDay\": false, \"dayType\": \"REST\"}\n  ]\n}" }, "url": "{{baseUrl}}/schedules" } },
+        { "name": "Actualizar horario", "request": { "method": "PATCH", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"name\": \"Horario de operación actualizado\",\n  \"toleranceMinutes\": 10,\n  \"active\": true\n}" }, "url": "{{baseUrl}}/schedules/{{scheduleId}}" } },
+        { "name": "Desactivar horario", "request": { "method": "DELETE", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }], "url": "{{baseUrl}}/schedules/{{scheduleId}}" } },
+        { "name": "Asignar horario a empleado", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{writeToken}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"employeeIds\": [\"{{employeeId}}\"],\n  \"validFrom\": \"2026-11-17\"\n}" }, "url": "{{baseUrl}}/schedules/{{scheduleId}}/assign" } }
+      ]
+    }
+  ]
+}
