@@ -2,7 +2,8 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import jwt from 'jsonwebtoken';
 import app from '../src/app.js';
-import { Employee, EmployeeProfile, EmploymentPeriod, User, Department, Area, Position } from '../src/models/index.js';
+import sequelize from '../src/config/database.js';
+import { Employee, EmployeeProfile, EmploymentPeriod, User, Department, Area, Position, Device, DeviceCommand } from '../src/models/index.js';
 import { validateEmploymentProfile } from '../src/services/profile-validation.service.js';
 
 const id = '11111111-1111-4111-8111-111111111111';
@@ -17,7 +18,12 @@ const call = (method, body, role = 'ADMIN') => fetch(`${base}/api/employees/${id
 before(async () => {
   process.env.JWT_SECRET = 'profile-test';
   replace(User, 'findByPk', async (role) => ({ id, role, active: true }));
-  replace(Employee, 'findByPk', async () => ({ id, active: true, name: 'Reloj original', profile }));
+  replace(Employee, 'findByPk', async () => ({ id, deviceId: id, deviceUserId: '108070017', active: true, name: 'Reloj original', profile, async update(values) { Object.assign(this, values); return this; } }));
+  replace(sequelize, 'transaction', async (callback) => callback({ LOCK: { UPDATE: 'UPDATE' } }));
+  replace(sequelize, 'query', async () => []);
+  replace(Device, 'findByPk', async () => ({ id, serialNumber: 'TEST-SERIAL' }));
+  replace(DeviceCommand, 'findOne', async () => null);
+  replace(DeviceCommand, 'create', async (values) => ({ ...values, commandId: 1 }));
   replace(EmployeeProfile, 'findOne', async () => profile);
   replace(EmploymentPeriod, 'count', async () => 0);
   replace(EmployeeProfile, 'create', async (data) => {

@@ -1,10 +1,10 @@
 import ZKLib from 'node-zklib';
 
 //crear cliente de conexion con el reloj
-const createZktecoClient = () => {
+const createZktecoClient = (device = {}) => {
   return new ZKLib(
-    process.env.ZK_IP,
-    Number(process.env.ZK_PORT),
+    device.ip || process.env.ZK_IP,
+    Number(device.port || process.env.ZK_PORT),
     10000,
     4000,
     Number(process.env.ZK_COMM_KEY),
@@ -13,8 +13,8 @@ const createZktecoClient = () => {
 };
 
 //registrar el dispositivo en la base de datos
-export const testZktecoConnection = async () => {
-  const device = createZktecoClient();
+export const testZktecoConnection = async (targetDevice = {}) => {
+  const device = createZktecoClient(targetDevice);
 
   try {
     await device.createSocket();
@@ -23,8 +23,8 @@ export const testZktecoConnection = async () => {
 
     return {
       connected: true,
-      ip: process.env.ZK_IP,
-      port: Number(process.env.ZK_PORT),
+      ip: targetDevice.ip || process.env.ZK_IP,
+      port: Number(targetDevice.port || process.env.ZK_PORT),
       deviceTime
     };
   } finally {
@@ -38,8 +38,8 @@ export const testZktecoConnection = async () => {
 
 //obtener los usuarios del reloj
 
-export const getZktecoUsers = async () => {
-  const device = createZktecoClient();
+export const getZktecoUsers = async (targetDevice = {}) => {
+  const device = createZktecoClient(targetDevice);
 
   try {
     await device.createSocket();
@@ -63,8 +63,8 @@ export const getZktecoUsers = async () => {
 
 //obtener las checadas del reloj
 
-export const getZktecoAttendances = async () => {
-  const device = createZktecoClient();
+export const getZktecoAttendances = async (targetDevice = {}) => {
+  const device = createZktecoClient(targetDevice);
 
   try {
     await device.createSocket();

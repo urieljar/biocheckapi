@@ -54,7 +54,7 @@ export const changeEmployment = async ({ employeeId, action, body = {}, actorId 
   });
 };
 
-export const archiveEmployee = async ({ employeeId, actorId, confirmation }) => sequelize.transaction(async (transaction) => {
+export const archiveEmployee = async ({ employeeId, actorId, confirmation, force = false }) => sequelize.transaction(async (transaction) => {
   const employee = await Employee.findByPk(employeeId, { transaction, lock: transaction.LOCK.UPDATE });
   if (!employee) fail('Empleado no encontrado', 404);
   if (confirmation !== employee.deviceUserId) fail('Confirma el número del empleado para eliminar el registro');
@@ -63,7 +63,20 @@ export const archiveEmployee = async ({ employeeId, actorId, confirmation }) => 
     counts.push(await Model.count({ where: { employeeId }, transaction }));
   }
   const profile = await EmployeeProfile.findOne({ where: { employeeId }, transaction });
-  if (counts.some(Boolean) || profile?.employmentStatus === 'TERMINATED') fail('El empleado tiene historial. Utiliza Dar de baja para conservarlo.', 409);
+  const hasHistory = counts.some(Boolean) || profile?.employmentStatus === 'TERMINATED';
+  if (hasHistory && !force) fail('El empleado tiene historial. Utiliza Dar de baja para conservarlo, o marca la opción para forzar la eliminación definitiva de pruebas.', 409);
+
+  if (force) {
+    await Attendance.destroy({ where: { [Op.or]: [{ employeeId }, { employeeId: null, deviceId: employee.deviceId, deviceUserId: employee.deviceUserId }] }, transaction });
+    await EmployeeSchedule.destroy({ where: { employeeId }, transaction });
+    await CalendarException.destroy({ where: { employeeId }, transaction });
+    await DeviceCommand.destroy({ where: { employeeId }, transaction });
+    await EmploymentPeriod.destroy({ where: { employeeId }, transaction });
+    if (profile) await profile.destroy({ transaction });
+    await employee.destroy({ force: true, transaction });
+    return { id: employee.id, name: employee.name, force: true };
+  }
+
   await employee.update({ active: false, deletedBy: actorId }, { transaction });
   await employee.destroy({ transaction }); // paranoid: conserva registro y expediente.
   return { id: employee.id, name: employee.name };

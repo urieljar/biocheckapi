@@ -1,0 +1,106 @@
+{
+  "info": {
+    "name": "BioCheck - Integracion v3 Clock Gateway",
+    "description": "Coleccion para consumir el puente directo entre un sistema externo y el reloj checador. La v3 no escribe empleados ni checadas en PostgreSQL de BioCheck.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{apiKeyV3}}", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3001" },
+    { "key": "apiKeyV3", "value": "" },
+    { "key": "deviceId", "value": "" },
+    { "key": "deviceUserId", "value": "108070050" },
+    { "key": "operationId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Dispositivos",
+      "item": [
+        {
+          "name": "Listar dispositivos",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/integrations/v3/devices" }
+        },
+        {
+          "name": "Estado del dispositivo",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/integrations/v3/devices/{{deviceId}}/status" }
+        },
+        {
+          "name": "Probar conexion TCP",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/integrations/v3/devices/{{deviceId}}/test-connection" }
+        }
+      ]
+    },
+    {
+      "name": "Usuarios del reloj",
+      "item": [
+        {
+          "name": "Crear usuario en reloj",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"deviceUserId\": \"108070050\",\n  \"deviceUid\": 60,\n  \"name\": \"JUAN PEREZ\",\n  \"deviceRole\": 0,\n  \"devicePin\": null,\n  \"cardNumber\": null\n}" },
+            "url": "{{baseUrl}}/api/integrations/v3/devices/{{deviceId}}/clock-users"
+          }
+        },
+        {
+          "name": "Listar usuarios del reloj",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/integrations/v3/devices/{{deviceId}}/clock-users" }
+        },
+        {
+          "name": "Consultar usuario del reloj",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/integrations/v3/devices/{{deviceId}}/clock-users/{{deviceUserId}}" }
+        },
+        {
+          "name": "Verificar usuario en reloj",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"deviceUserId\": \"{{deviceUserId}}\",\n  \"expected\": \"EXISTS\"\n}" },
+            "url": "{{baseUrl}}/api/integrations/v3/devices/{{deviceId}}/clock-users/verify"
+          }
+        },
+        {
+          "name": "Actualizar usuario en reloj",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"JUAN PEREZ ACTUALIZADO\",\n  \"deviceRole\": 0,\n  \"devicePin\": null,\n  \"cardNumber\": null\n}" },
+            "url": "{{baseUrl}}/api/integrations/v3/devices/{{deviceId}}/clock-users/{{deviceUserId}}"
+          }
+        },
+        {
+          "name": "Eliminar usuario y biométricos",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"confirmationDeviceUserId\": \"{{deviceUserId}}\"\n}" },
+            "url": "{{baseUrl}}/api/integrations/v3/devices/{{deviceId}}/clock-users/{{deviceUserId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Checadas directas",
+      "item": [
+        {
+          "name": "Descargar checadas del reloj",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/integrations/v3/devices/{{deviceId}}/attendances/sync" }
+        }
+      ]
+    },
+    {
+      "name": "Operaciones ADMS",
+      "item": [
+        {
+          "name": "Consultar operacion",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/integrations/v3/device-operations/{{operationId}}" }
+        }
+      ]
+    }
+  ]
+}

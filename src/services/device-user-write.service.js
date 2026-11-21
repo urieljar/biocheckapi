@@ -5,6 +5,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
 const { COMMANDS } = require('node-zklib/constants.js');
+import { queueUpdateUserInfoCommand } from '../services/adms-command.service.js';
 
 const USER_RECORD_SIZE = 72;
 
@@ -64,10 +65,20 @@ const getCommandName = (command) => {
   return entry?.[0] || 'UNKNOWN';
 };
 
-export const createZktecoClient = () => {
+export const buildDeleteUserPayload = (employee) => {
+  const uid = Number(employee.deviceUid);
+  if (!Number.isInteger(uid) || uid <= 0 || uid > 65535) {
+    throw new Error('El empleado no tiene un UID interno válido para retirarlo por TCP');
+  }
+  const payload = Buffer.alloc(2);
+  payload.writeUInt16LE(uid, 0);
+  return payload;
+};
+
+export const createZktecoClient = (device = {}) => {
   return new ZKLib(
-    process.env.ZK_IP,
-    Number(process.env.ZK_PORT) || 4370,
+    device.ip || process.env.ZK_IP,
+    Number(device.port || process.env.ZK_PORT) || 4370,
     10000,
     4000,
     Number(process.env.ZK_COMM_KEY) || 0,
@@ -75,8 +86,23 @@ export const createZktecoClient = () => {
   );
 };
 
-export const writeEmployeeToDevice = async (employee) => {
-  const device = createZktecoClient();
+export const writeEmployeeToDevice = async (employee, { device: targetDevice } = {}) => {
+  // ADMS fallback for deviceUserId longer than 8 characters
+  if (String(employee.deviceUserId).length > 8) {
+    await queueUpdateUserInfoCommand({
+      device: null,
+      employee,
+      serialNumber: null,
+    });
+    return {
+      ok: true,
+      note: 'Uso ADMS porque deviceUserId tiene > 8 caracteres',
+      deviceUserId: employee.deviceUserId,
+    };
+  }
+
+  // TCP path for short IDs
+  const device = createZktecoClient(targetDevice);
 
   try {
     await device.createSocket();
@@ -86,7 +112,6 @@ export const writeEmployeeToDevice = async (employee) => {
     }
 
     const userRecord = buildUserRecord(employee);
-
     const reply = await device.executeCmd(
       COMMANDS.CMD_USER_WRQ,
       userRecord
@@ -97,14 +122,10 @@ export const writeEmployeeToDevice = async (employee) => {
     if (command !== COMMANDS.CMD_ACK_OK) {
       const commandName = getCommandName(command);
       const replyHex = reply.toString('hex');
-
-      throw new Error(
-        `El checador respondió código ${command} (${commandName}). Respuesta HEX: ${replyHex}`
-      );
+      throw new Error(`El checador respondió código ${command} (${commandName}). Respuesta HEX: ${replyHex}`);
     }
 
     await device.executeCmd(COMMANDS.CMD_REFRESHDATA, '');
-
     if (typeof device.enableDevice === 'function') {
       await device.enableDevice();
     }
@@ -112,21 +133,39 @@ export const writeEmployeeToDevice = async (employee) => {
     return {
       ok: true,
       deviceUserId: employee.deviceUserId,
-      deviceRole: employee.deviceRole
+      deviceRole: employee.deviceRole,
     };
   } finally {
     try {
       if (typeof device.enableDevice === 'function') {
         await device.enableDevice();
       }
-    } catch {
-      // Ignoramos error al reactivar.
-    }
-
+    } catch {}
     try {
       await device.disconnect();
-    } catch {
-      // La conexión ya estaba cerrada.
-    }
+    } catch {}
+  }
+};
+
+export const deleteEmployeeFromDevice = async (employee, { device: targetDevice } = {}) => {
+  if (String(employee.deviceUserId).length > 8) {
+    throw new Error('Los IDs mayores de 8 caracteres requieren retiro por ADMS');
+  }
+  const device = createZktecoClient(targetDevice);
+  try {
+    await device.createSocket();
+    if (typeof device.disableDevice === 'function') await device.disableDevice();
+    // CMD_DELETE_USER espera el UID interno como uint16 little-endian.
+    // Enviar el PIN como texto (por ejemplo "1" = 0x31) elimina por error
+    // el UID 49, por lo que nunca debe serializarse deviceUserId aquí.
+    const payload = buildDeleteUserPayload(employee);
+    const reply = await device.executeCmd(COMMANDS.CMD_DELETE_USER, payload);
+    const command = reply.readUInt16LE(0);
+    if (command !== COMMANDS.CMD_ACK_OK) throw new Error(`El checador rechazó el retiro del usuario (código ${command})`);
+    await device.executeCmd(COMMANDS.CMD_REFRESHDATA, '');
+    return { ok: true, deviceUserId: employee.deviceUserId };
+  } finally {
+    try { if (typeof device.enableDevice === 'function') await device.enableDevice(); } catch {}
+    try { await device.disconnect(); } catch {}
   }
 };

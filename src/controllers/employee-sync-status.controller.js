@@ -1,4 +1,4 @@
-import { Employee, Device } from '../models/index.js';
+import { Employee, Device, DeviceCommand } from '../models/index.js';
 
 const payload = (employee) => ({
   employeeId: employee.id,
@@ -13,15 +13,25 @@ const payload = (employee) => ({
     name: employee.device.name,
     ip: employee.device.ip,
     port: employee.device.port,
-    lastConnectionAt: employee.device.lastConnectionAt
+    lastConnectionAt: employee.device.lastConnectionAt,
+    admsStatus: employee.device.admsStatus,
+    lastAdmsAt: employee.device.lastAdmsAt,
+    admsLastError: employee.device.admsLastError
   } : null
 });
 
 export const getEmployeeSyncStatus = async (req, res) => {
   const employee = await Employee.findByPk(req.params.id, {
     attributes: ['id', 'deviceUserId', 'name', 'active', 'deviceSyncStatus', 'deviceSyncError', 'deviceSyncedAt'],
-    include: [{ model: Device, as: 'device', attributes: ['id', 'name', 'ip', 'port', 'lastConnectionAt'], required: false }]
+    include: [{ model: Device, as: 'device', attributes: ['id', 'name', 'ip', 'port', 'lastConnectionAt', 'admsStatus', 'lastAdmsAt', 'admsLastError'], required: false }]
   });
   if (!employee) return res.status(404).json({ ok: false, message: 'Empleado no encontrado' });
-  return res.json({ ok: true, data: payload(employee) });
+  const command = await DeviceCommand.findOne({
+    where: { employeeId: employee.id },
+    order: [['createdAt', 'DESC']],
+    attributes: ['commandId', 'serialNumber', 'status', 'attemptCount', 'maxAttempts', 'nextAttemptAt', 'lastAttemptAt', 'sentAt', 'returnedAt', 'returnCode', 'responseBody', 'lastError', 'createdAt']
+  });
+  const data = payload(employee);
+  data.command = command;
+  return res.json({ ok: true, data });
 };

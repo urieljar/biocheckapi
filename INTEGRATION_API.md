@@ -222,3 +222,102 @@ incapacidad u otra incidencia), `punchDetails` (id, hora, fecha original y
 origen), `punches`, estado, motivo y minutos trabajados. Los resultados masivos
 incluyen el resumen de cada empleado y el resumen global. El rango está limitado
 a 31 días por consulta.
+
+## Contrato v3: Puente Directo de Reloj (Clock Gateway)
+
+La integración v3 permite a sistemas externos (ERP, control de acceso, nóminas externas)
+interactuar **directamente con los relojes biométricos ZKTeco** sin crear empleados,
+perfiles ni alterar la base de datos de personal de BioCheck (`storedInBioCheckEmployees: false`).
+
+### Credencial de Acceso v3
+
+Se configura en `.env` mediante `INTEGRATION_V3_API_KEY_SHA256` (hash SHA-256).
+Para generar una clave nueva:
+
+```powershell
+node src/scripts/generate-integration-v3-key.js
+```
+
+La clave privada se guarda en `.local/integration-v3.credentials.json`.
+Todas las solicitudes requieren el encabezado:
+
+```http
+Authorization: Bearer <API_KEY_V3>
+```
+
+### Endpoints de Relojes y Estado
+
+```http
+GET  /api/integrations/v3/devices
+GET  /api/integrations/v3/devices/:deviceId/status
+POST /api/integrations/v3/devices/:deviceId/test-connection
+```
+
+- `GET /devices`: Lista los relojes activos registrados con su `deviceId` (UUID), IP, puerto y estado ADMS.
+- `GET /devices/:deviceId/status`: Consulta el estado de conectividad TCP y ADMS del reloj.
+- `POST /devices/:deviceId/test-connection`: Ejecuta un ping/handshake TCP directo con el dispositivo.
+
+### Endpoints de Usuarios en el Reloj (Clock Users)
+
+```http
+GET    /api/integrations/v3/devices/:deviceId/clock-users
+GET    /api/integrations/v3/devices/:deviceId/clock-users/:deviceUserId
+POST   /api/integrations/v3/devices/:deviceId/clock-users
+PATCH  /api/integrations/v3/devices/:deviceId/clock-users/:deviceUserId
+DELETE /api/integrations/v3/devices/:deviceId/clock-users/:deviceUserId
+POST   /api/integrations/v3/devices/:deviceId/clock-users/verify
+GET    /api/integrations/v3/device-operations/:operationId
+```
+
+#### 1. Crear usuario en el reloj (`POST /clock-users`)
+
+Cuerpo de la petición:
+```json
+{
+  "deviceUserId": "108070050",
+  "deviceUid": 60,
+  "name": "JUAN PEREZ",
+  "deviceRole": 0,
+  "devicePin": "1234",
+  "cardNumber": "987654321"
+}
+```
+
+- `deviceUserId`: Identificador del usuario (string, máximo 50 caracteres).
+- `deviceUid`: ID numérico interno en el reloj (entero entre 1 y 65535, único en el reloj).
+- `name`: Nombre que se mostrará en la pantalla del reloj (máximo 160 caracteres).
+- `deviceRole`: Rol en el reloj (`0`: Empleado, `2`: Registrar, `8`: Personalizado, `14`: Super Admin).
+- `devicePin`: PIN numérico opcional (máximo 20 dígitos) o `null`.
+- `cardNumber`: Número de tarjeta RFID/proximidad opcional o `null`.
+
+**Comportamiento de transporte:**
+- Si `deviceUserId.length <= 8`: Se escribe por **TCP directo** y se verifica inmediatamente en el hardware (HTTP 201 `status: VERIFIED`).
+- Si `deviceUserId.length > 8`: Se encola automáticamente por **ADMS** (HTTP 202 `transport: ADMS`, devolviendo `operationId` para seguimiento).
+
+#### 2. Actualizar usuario en el reloj (`PATCH /clock-users/:deviceUserId`)
+
+Modifica los campos `name`, `deviceRole`, `devicePin` o `cardNumber`. Los campos `deviceUserId` y `deviceUid` son inmutables.
+
+#### 3. Retirar usuario del reloj (`DELETE /clock-users/:deviceUserId`)
+
+Elimina al usuario y sus biométricos (huellas y rostros) del hardware.
+Requiere confirmación en el cuerpo:
+```json
+{
+  "confirmationDeviceUserId": "108070050"
+}
+```
+
+#### 4. Verificar presencia en el reloj (`POST /clock-users/verify`)
+
+Valida si un usuario existe (`EXISTS`) o está ausente (`ABSENT`) físicamente en el dispositivo:
+```json
+{
+  "deviceUserId": "108070050",
+  "expected": "EXISTS"
+}
+```
+
+#### 5. Consultar operación ADMS (`GET /device-operations/:operationId`)
+
+Permite al sistema externo monitorear si una operación encolada fue recibida y confirmada por el reloj (`PENDING`, `SUCCESS`, `ERROR`).

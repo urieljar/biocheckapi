@@ -35,8 +35,35 @@ const DeviceCommand = sequelize.define(
       allowNull: false,
       defaultValue: 'PENDING',
       validate: {
-        isIn: [['PENDING', 'SENT', 'SUCCESS', 'ERROR']]
+        isIn: [['PENDING', 'SENT', 'CONFIRMED', 'ERROR']]
       }
+    },
+
+    attemptCount: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0
+    },
+
+    maxAttempts: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 3
+    },
+
+    nextAttemptAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+
+    lastAttemptAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+
+    lastError: {
+      type: DataTypes.TEXT,
+      allowNull: true
     },
 
     returnCode: {

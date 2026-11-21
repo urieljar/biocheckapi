@@ -45,6 +45,9 @@ export const reconcileClockEmployee = async (device, user) => sequelize.transact
     });
 
     if (employee?.deletedAt) return 'skippedDeleted';
+    // El reloj puede devolver datos anteriores a un alta/cambio local pendiente.
+    // No sobrescribirlos ni convertir el registro en SYNCED al importar.
+    if (employee && ['PENDING', 'ERROR'].includes(employee.deviceSyncStatus)) return 'skippedUnsynced';
     const profile = employee ? await EmployeeProfile.findOne({ where: { employeeId: employee.id }, transaction }) : null;
 
     const employeeData = {
@@ -72,8 +75,8 @@ export const reconcileClockEmployee = async (device, user) => sequelize.transact
 
 });
 
-export const synchronizeEmployees = async () => {
-  const users = await getZktecoUsers();
+export const createEmployeeSynchronizer = ({ readUsers = getZktecoUsers } = {}) => async () => {
+  const users = await readUsers();
 
   if (users.length === 0) {
     throw new Error(
@@ -94,15 +97,20 @@ export const synchronizeEmployees = async () => {
   let created = 0;
   let updated = 0;
   let skippedDeleted = 0;
+  let skippedUnsynced = 0;
 
   for (const user of users) {
     const outcome = await reconcileClockEmployee(device, user);
     if (outcome === 'created') created++;
     else if (outcome === 'updated') updated++;
-    else skippedDeleted++;
+    else if (outcome === 'skippedDeleted') skippedDeleted++;
+    else if (outcome === 'skippedUnsynced') skippedUnsynced++;
   }
 
   const deviceUserIds = users.map((user) => String(user.userId));
+  const preservedLocal = await Employee.count({
+    where: { deviceId: device.id, deviceSyncStatus: { [Op.in]: ['PENDING', 'ERROR'] } }
+  });
   const [deactivated] = await Employee.update(
     {
       active: false
@@ -113,7 +121,9 @@ export const synchronizeEmployees = async () => {
         deviceUserId: {
           [Op.notIn]: deviceUserIds
         },
-        active: true
+        active: true,
+        // Se evalúa en el UPDATE: protege también cambios locales concurrentes.
+        deviceSyncStatus: 'SYNCED'
       }
     }
   );
@@ -128,6 +138,10 @@ export const synchronizeEmployees = async () => {
     created,
     updated,
     skippedDeleted,
+    skippedUnsynced,
+    preservedLocal,
     deactivated
   };
 };
+
+export const synchronizeEmployees = createEmployeeSynchronizer();

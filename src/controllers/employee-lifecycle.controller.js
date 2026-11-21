@@ -10,6 +10,6 @@ const handle = (operation) => async (req, res) => {
 };
 export const terminate = handle((req) => changeEmployment({ employeeId: req.params.id, action: 'terminate', body: req.body, actorId: req.user.id }));
 export const rehire = handle((req) => changeEmployment({ employeeId: req.params.id, action: 'rehire', body: req.body, actorId: req.user.id }));
-export const archive = handle((req) => archiveEmployee({ employeeId: req.params.id, actorId: req.user.id, confirmation: req.body?.confirmation }));
+export const archive = handle((req) => archiveEmployee({ employeeId: req.params.id, actorId: req.user.id, confirmation: req.body?.confirmation, force: Boolean(req.body?.force) }));
 export const restore = handle((req) => restoreEmployee(req.params.id));
 export const employmentHistory = handle((req) => EmploymentPeriod.findAll({ where: { employeeId: req.params.id }, order: [['createdAt', 'ASC']] }));

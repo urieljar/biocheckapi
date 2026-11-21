@@ -2,15 +2,46 @@ import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
-// Arranque para Docker: usa la base de datos del servicio `database` y
-// conserva la misma credencial que utiliza la colección de Postman.
-if (!process.env.INTEGRATION_API_KEY_SHA256) {
-  const credentialsPath = new URL('../../.local/integration-demo.credentials.json', import.meta.url);
-  const credentials = JSON.parse(await readFile(credentialsPath, 'utf8'));
-  if (typeof credentials.apiKey !== 'string' || !/^[a-f0-9]{64}$/i.test(credentials.apiKey)) {
-    throw new Error('Configura INTEGRATION_API_KEY_SHA256 o crea .local/integration-demo.credentials.json');
+// Arranque para Docker: usa la base de datos del servicio `database`.
+// Las credenciales demo son opcionales; en instalaciones reales se pueden
+// conservar únicamente los archivos read/write/v3 generados localmente.
+const readCredentialHash = async (fileNames) => {
+  for (const fileName of fileNames) {
+    try {
+      const credentialsPath = new URL(`../../.local/${fileName}`, import.meta.url);
+      const credentials = JSON.parse(await readFile(credentialsPath, 'utf8'));
+      if (typeof credentials.apiKey === 'string' && /^[a-f0-9]{64}$/i.test(credentials.apiKey)) {
+        return createHash('sha256').update(credentials.apiKey).digest('hex');
+      }
+    } catch {
+      // Probar el siguiente archivo de credenciales.
+    }
   }
-  process.env.INTEGRATION_API_KEY_SHA256 = createHash('sha256').update(credentials.apiKey).digest('hex');
+  return null;
+};
+
+if (!process.env.INTEGRATION_API_KEY_SHA256) {
+  process.env.INTEGRATION_API_KEY_SHA256 = await readCredentialHash([
+    'integration-demo.credentials.json',
+    'integration-read.credentials.json',
+    'integration-v3.credentials.json'
+  ]);
+}
+if (!process.env.INTEGRATION_WRITE_API_KEY_SHA256) {
+  process.env.INTEGRATION_WRITE_API_KEY_SHA256 = await readCredentialHash([
+    'integration-write.credentials.json',
+    'integration-demo.credentials.json',
+    'integration-v3.credentials.json'
+  ]);
+}
+if (!process.env.INTEGRATION_V3_API_KEY_SHA256) {
+  process.env.INTEGRATION_V3_API_KEY_SHA256 = await readCredentialHash([
+    'integration-v3.credentials.json',
+    'integration-demo.credentials.json'
+  ]);
+}
+if (!process.env.INTEGRATION_API_KEY_SHA256 || !process.env.INTEGRATION_WRITE_API_KEY_SHA256 || !process.env.INTEGRATION_V3_API_KEY_SHA256) {
+  throw new Error('No se encontraron credenciales de integración. Configura los hashes INTEGRATION_*_API_KEY_SHA256 o genera los archivos .local/integration-*.credentials.json');
 }
 process.env.INTEGRATION_HOST ||= '0.0.0.0';
 process.env.INTEGRATION_PORT ||= '3001';

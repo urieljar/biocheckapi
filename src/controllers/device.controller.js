@@ -47,7 +47,7 @@ export const syncEmployees = async (req, res) => {
 
     res.json({
       ok: true,
-      message: 'Empleados sincronizados correctamente',
+      message: `Importación completada: ${result.created} creados, ${result.updated} actualizados. ${result.preservedLocal} empleados con cambios pendientes o con error fueron conservados sin sobrescribir ni desactivar.`,
       data: result
     });
   } catch (error) {

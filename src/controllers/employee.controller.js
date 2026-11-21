@@ -1,3 +1,4 @@
+import { validateProfileClockName, saveProfileWithClockName, sendProfileClockName, profileClockNameMessage } from '../services/profile-name-sync.service.js';
 import { Op } from 'sequelize';
 import {
   Device,
@@ -8,14 +9,17 @@ import {
   Position
 } from '../models/index.js';
 import {
-  queueUpdateUserInfoCommand
+  queueUpdateUserInfoCommand,
+  queueDeleteUserCommand
 } from '../services/adms-command.service.js';
-import { writeEmployeeToDevice } from '../services/device-user-write.service.js';
+import { writeEmployeeToDevice, deleteEmployeeFromDevice } from '../services/device-user-write.service.js';
 import { hasCapability } from '../security/roles.js';
 import { EmploymentPeriod } from '../models/index.js';
 import { validateEmploymentProfile } from '../services/profile-validation.service.js';
 
 const DEVICE_ROLES = new Set([0, 2, 8, 12, 14]);
+const ADMS_DEVICE_USER_ID_LIMIT = 8;
+const requiresAdmsForEmployee = (employee) => String(employee.deviceUserId || '').length > ADMS_DEVICE_USER_ID_LIMIT;
 
 const resolveEmployeeDevice = async ({ deviceId, deviceIp }) => {
   if (deviceId) {
@@ -338,12 +342,42 @@ export const createEmployee = async (req, res) => {
       active: Boolean(active)
     });
 
+    let sync = {
+      transport: requiresAdmsForEmployee(employee) ? 'ADMS' : 'TCP',
+      status: 'PENDING',
+      commandId: null,
+      error: null
+    };
+
+    try {
+      if (requiresAdmsForEmployee(employee)) {
+        const command = await queueUpdateUserInfoCommand({
+          device,
+          employee,
+          serialNumber: device.serialNumber || normalizeOptionalString(req.body.serialNumber)
+        });
+        await employee.update({ deviceSyncStatus: 'PENDING', deviceSyncError: null, deviceSyncedAt: null });
+        sync = { transport: 'ADMS', status: command.status, commandId: command.commandId, error: null };
+      } else {
+        const tcpResult = await syncEmployeeToDevice(employee);
+        sync = {
+          transport: 'TCP',
+          status: tcpResult.ok ? 'SYNCED' : 'ERROR',
+          commandId: null,
+          error: tcpResult.ok ? null : tcpResult.error.message
+        };
+      }
+    } catch (syncError) {
+      await employee.update({ deviceSyncStatus: 'ERROR', deviceSyncError: syncError.message, deviceSyncedAt: null });
+      sync = { ...sync, status: 'ERROR', error: syncError.message };
+    }
+
     const result = await Employee.findByPk(employee.id, {
       include: [
         {
           model: Device,
           as: 'device',
-          attributes: ['id', 'name', 'ip']
+          attributes: ['id', 'name', 'ip', 'serialNumber']
         }
       ],
       attributes: {
@@ -355,7 +389,8 @@ export const createEmployee = async (req, res) => {
       ok: true,
       message:
         'Empleado guardado correctamente en la base de datos',
-      data: result
+      data: result,
+      sync
     });
   } catch (error) {
     console.error('Error al crear empleado:', error.message);
@@ -456,6 +491,8 @@ export const createEmployeeProfile = async (req, res) => {
     }
 
     const profileData = buildProfileData(req.body);
+    const clockNameError = validateProfileClockName(profileData);
+    if (clockNameError) return res.status(400).json({ ok: false, message: clockNameError });
     if (profileData.employmentStatus && !hasCapability(req.user?.role, 'employee.status')) {
       return res.status(403).json({ ok: false, message: 'No tienes permiso para registrar el estado laboral' });
     }
@@ -470,14 +507,14 @@ export const createEmployeeProfile = async (req, res) => {
       });
     }
 
-    const profile = await EmployeeProfile.create({
-      employeeId: employee.id,
-      ...profileData
-    });
+    const saved = await saveProfileWithClockName({ employeeId: employee.id, values: profileData });
+    const profile = saved.profile;
+    const sync = await sendProfileClockName({ ...saved, syncDirect: syncEmployeeToDevice });
 
     res.status(201).json({
       ok: true,
-      message: 'Perfil del empleado creado correctamente',
+      message: profileClockNameMessage('Perfil del empleado creado correctamente', sync),
+      sync,
       data: profile
     });
   } catch (error) {
@@ -514,6 +551,8 @@ export const updateEmployeeProfile = async (req, res) => {
     const auditBefore = profile.get({ plain: true });
 
     const updates = buildProfileData(req.body);
+    const clockNameError = validateProfileClockName(updates);
+    if (clockNameError) return res.status(400).json({ ok: false, message: clockNameError });
     if (['employmentStatus', 'terminationDate', 'terminationReason'].some((key) => updates[key] !== undefined && updates[key] !== (profile[key] ?? null)) && !hasCapability(req.user?.role, 'employee.status')) {
       return res.status(403).json({ ok: false, message: 'No tienes permiso para cambiar el estado laboral' });
     }
@@ -541,14 +580,16 @@ export const updateEmployeeProfile = async (req, res) => {
       });
     }
 
-    await profile.update(updates);
+    const saved = await saveProfileWithClockName({ employeeId: employee.id, profile, values: updates });
+    const sync = await sendProfileClockName({ ...saved, syncDirect: syncEmployeeToDevice });
     req.auditBefore = auditBefore;
     req.auditAfter = profile.get({ plain: true });
 
     res.json({
       ok: true,
-      message: 'Perfil del empleado actualizado correctamente',
-      data: profile
+      message: profileClockNameMessage('Perfil del empleado actualizado correctamente', sync),
+      sync,
+      data: saved.profile
     });
   } catch (error) {
     console.error('Error al actualizar perfil del empleado:', error.message);
@@ -699,15 +740,50 @@ export const updateEmployeeDeviceSettings = async (req, res) => {
       deviceSyncedAt: null
     });
 
+    // El nombre del checador es el dato editable en esta ventana; mantener
+    // Nombre(s) del expediente alineado evita que ambos módulos diverjan.
+    if (updates.name !== undefined) {
+      await EmployeeProfile.update(
+        { firstName: updates.name },
+        { where: { employeeId: employee.id } }
+      );
+    }
+
+    // Guardar los cambios locales y enviarlos al reloj siguiendo el mismo
+    // flujo que el alta: ADMS para IDs largos y TCP para IDs cortos.
+    let sync = { transport: null, status: 'PENDING', commandId: null, error: null };
+    const device = await Device.findByPk(employee.deviceId);
+    try {
+      if (requiresAdmsForEmployee(employee)) {
+        const command = await queueUpdateUserInfoCommand({ device, employee });
+        sync = { transport: 'ADMS', status: command.status, commandId: command.commandId, error: null };
+      } else {
+        const tcpResult = await syncEmployeeToDevice(employee);
+        sync = {
+          transport: 'TCP',
+          status: tcpResult.ok ? 'SYNCED' : 'ERROR',
+          commandId: null,
+          error: tcpResult.ok ? null : tcpResult.error.message
+        };
+      }
+    } catch (syncError) {
+      await employee.update({ deviceSyncStatus: 'ERROR', deviceSyncError: syncError.message, deviceSyncedAt: null });
+      sync = { transport: requiresAdmsForEmployee(employee) ? 'ADMS' : 'TCP', status: 'ERROR', commandId: null, error: syncError.message };
+    }
+
     const result = await getEmployeeById(employee.id);
     req.auditBefore = auditBefore;
     req.auditAfter = result;
 
     res.json({
       ok: true,
-      message:
-        'Ajustes del dispositivo actualizados en PostgreSQL. El empleado quedó pendiente de sincronizar al checador',
-      data: result
+      message: sync.status === 'SYNCED'
+        ? 'Ajustes actualizados y sincronizados con el checador'
+        : sync.status === 'ERROR'
+          ? 'Ajustes guardados en PostgreSQL, pero no fue posible sincronizarlos con el checador'
+          : 'Ajustes actualizados; el comando quedó pendiente de confirmación del checador',
+      data: result,
+      sync
     });
   } catch (error) {
     console.error(
@@ -746,7 +822,7 @@ export const syncEmployeeToDeviceById = async (req, res) => {
         {
           model: Device,
           as: 'device',
-          attributes: ['id', 'name', 'ip']
+          attributes: ['id', 'name', 'ip', 'serialNumber']
         }
       ]
     });
@@ -760,6 +836,22 @@ export const syncEmployeeToDeviceById = async (req, res) => {
     const laborProfile = await EmployeeProfile.findOne({ where: { employeeId: employee.id } });
     if (laborProfile?.employmentStatus === 'TERMINATED') return res.status(409).json({ ok: false, message: 'El empleado está dado de baja. Registra su reingreso antes de enviarlo al reloj.' });
 
+
+    if (requiresAdmsForEmployee(employee)) {
+      const command = await queueUpdateUserInfoCommand({
+        device: employee.device,
+        employee,
+        serialNumber: normalizeOptionalString(req.body?.serialNumber || req.query?.serialNumber)
+      });
+      await employee.update({ deviceSyncStatus: 'PENDING', deviceSyncError: null, deviceSyncedAt: null });
+      const result = await getEmployeeById(employee.id);
+      return res.status(202).json({
+        ok: true,
+        message: 'ID mayor de 8 caracteres: comando ADMS encolado; el reloj confirmará la sincronización',
+        data: result,
+        deviceResult: { transport: 'ADMS', commandId: command.commandId, status: command.status }
+      });
+    }
 
     const syncResult = await syncEmployeeToDevice(employee);
     const result = await getEmployeeById(employee.id);
@@ -778,7 +870,7 @@ export const syncEmployeeToDeviceById = async (req, res) => {
       ok: true,
       message: 'Empleado sincronizado correctamente al checador',
       data: result,
-      deviceResult: syncResult.result
+      deviceResult: { transport: 'TCP', result: syncResult.result }
     });
   } catch (error) {
     console.error(
@@ -790,6 +882,27 @@ export const syncEmployeeToDeviceById = async (req, res) => {
       ok: false,
       message: 'No fue posible sincronizar el empleado al checador'
     });
+  }
+};
+
+export const removeEmployeeFromDevice = async (req, res) => {
+  try {
+    const employee = await Employee.findByPk(req.params.id, { include: [{ model: Device, as: 'device' }] });
+    if (!employee) return res.status(404).json({ ok: false, message: 'Empleado no encontrado' });
+    if (String(req.body?.confirmation || '').trim() !== String(employee.deviceUserId)) {
+      return res.status(400).json({
+        ok: false,
+        message: 'Escribe el ID del checador para confirmar el retiro y la eliminación de sus biométricos'
+      });
+    }
+    if (requiresAdmsForEmployee(employee)) {
+      const command = await queueDeleteUserCommand({ device: employee.device, employee, serialNumber: normalizeOptionalString(req.body?.serialNumber || req.query?.serialNumber) });
+      return res.status(202).json({ ok: true, message: 'Retiro encolado por ADMS; el reloj confirmará la eliminación', deviceResult: { transport: 'ADMS', commandId: command.commandId, status: command.status } });
+    }
+    const result = await deleteEmployeeFromDevice(employee);
+    res.json({ ok: true, message: 'Empleado retirado del checador', deviceResult: { transport: 'TCP', result } });
+  } catch (error) {
+    res.status(502).json({ ok: false, message: 'No fue posible retirar al empleado del checador', error: error.message });
   }
 };
 
@@ -809,7 +922,7 @@ export const syncPendingEmployeesToDevice = async (req, res) => {
         {
           model: Device,
           as: 'device',
-          attributes: ['id', 'name', 'ip']
+          attributes: ['id', 'name', 'ip', 'serialNumber']
         }
       ],
       order: [['updatedAt', 'ASC']],
@@ -819,18 +932,23 @@ export const syncPendingEmployeesToDevice = async (req, res) => {
     const results = [];
 
     for (const employee of employees) {
-      const syncResult = await syncEmployeeToDevice(employee);
-      const updatedEmployee = await getEmployeeById(employee.id);
-
-      results.push({
-        employeeId: employee.id,
-        deviceUserId: employee.deviceUserId,
-        ok: syncResult.ok,
-        error: syncResult.ok
-          ? null
-          : syncResult.error.message,
-        data: updatedEmployee
-      });
+      try {
+        if (requiresAdmsForEmployee(employee)) {
+          const command = await queueUpdateUserInfoCommand({
+            device: employee.device,
+            employee,
+            serialNumber: normalizeOptionalString(req.body.serialNumber || req.query.serialNumber)
+          });
+          await employee.update({ deviceSyncStatus: 'PENDING', deviceSyncError: null, deviceSyncedAt: null });
+          results.push({ employeeId: employee.id, deviceUserId: employee.deviceUserId, transport: 'ADMS', ok: true, status: command.status, commandId: command.commandId });
+        } else {
+          const syncResult = await syncEmployeeToDevice(employee);
+          results.push({ employeeId: employee.id, deviceUserId: employee.deviceUserId, transport: 'TCP', ok: syncResult.ok, status: syncResult.ok ? 'SYNCED' : 'ERROR', error: syncResult.ok ? null : syncResult.error.message });
+        }
+      } catch (error) {
+        await employee.update({ deviceSyncStatus: 'ERROR', deviceSyncError: error.message, deviceSyncedAt: null });
+        results.push({ employeeId: employee.id, deviceUserId: employee.deviceUserId, ok: false, status: 'ERROR', error: error.message });
+      }
     }
 
     res.json({
@@ -838,7 +956,7 @@ export const syncPendingEmployeesToDevice = async (req, res) => {
       message:
         employees.length === 0
           ? 'No hay empleados pendientes de sincronizar'
-          : 'Sincronización de empleados pendientes finalizada',
+        : 'Empleados pendientes procesados usando TCP o ADMS según el tamaño del ID',
       processed: employees.length,
       data: results
     });

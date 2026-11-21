@@ -4,6 +4,7 @@ import {
   getEmployee,
   queueEmployeeAdmsSync,
   syncEmployeeToDeviceById,
+  removeEmployeeFromDevice,
   syncPendingEmployeesToDevice,
   updateEmployeeDeviceSettings,
   getEmployeeProfile,
@@ -34,5 +35,6 @@ router.patch('/:id/profile', requireCapability('employee.write'), updateEmployee
 router.patch('/:id/device-settings', requireCapability('employee.write'), updateEmployeeDeviceSettings);
 router.post('/:id/queue-adms-sync', requireCapability('employee.write'), queueEmployeeAdmsSync);
 router.post('/:id/sync-to-device', requireCapability('employee.write'), syncEmployeeToDeviceById);
+router.post('/:id/remove-from-device', requireCapability('employee.status'), removeEmployeeFromDevice);
 
 export default router;

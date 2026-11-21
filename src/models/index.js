@@ -6,6 +6,7 @@ import WorkSchedule from './work-schedule.model.js';
 import ScheduleDay from './schedule-day.model.js';
 import EmployeeSchedule from './employee-schedule.model.js';
 import DeviceCommand from './device-command.model.js';
+import DeviceAdmsEvent from './device-adms-event.model.js';
 import EmployeeProfile from './employee-profile.model.js';
 import Department from './department.model.js';
 import Area from './area.model.js';
@@ -60,6 +61,9 @@ DeviceCommand.belongsTo(Employee, {
   foreignKey: 'employeeId',
   as: 'employee'
 });
+
+Device.hasMany(DeviceAdmsEvent, { foreignKey: 'deviceId', as: 'admsEvents' });
+DeviceAdmsEvent.belongsTo(Device, { foreignKey: 'deviceId', as: 'device' });
 
 Employee.hasMany(Attendance, {
   foreignKey: 'employeeId',
@@ -220,6 +224,7 @@ export {
   Attendance,
   User,
   DeviceCommand,
+  DeviceAdmsEvent,
   WorkSchedule,
   ScheduleDay,
   EmployeeSchedule,

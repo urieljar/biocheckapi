@@ -2,9 +2,19 @@ import { Device } from '../models/index.js';
 import { testZktecoConnection } from '../services/zkteco.service.js';
 import { logger } from '../services/logger.service.js';
 import { getDeviceMonitorStatus, setDeviceMonitorStatus } from '../services/device-monitor.service.js';
+import { Op } from 'sequelize';
 
 let timer = null;
 let running = false;
+
+const markStaleAdmsDevices = async () => {
+  const timeoutMs = Math.max(60000, Number(process.env.ADMS_HEARTBEAT_TIMEOUT_MS || 180000));
+  const cutoff = new Date(Date.now() - timeoutMs);
+  await Device.update(
+    { admsStatus: 'OFFLINE', admsLastError: 'Sin consultas ADMS recientes' },
+    { where: { admsStatus: 'ONLINE', lastAdmsAt: { [Op.lt]: cutoff } } }
+  );
+};
 
 export const monitorDeviceOnce = async () => {
   if (running) return;
@@ -12,6 +22,7 @@ export const monitorDeviceOnce = async () => {
   const started = Date.now();
   const ip = process.env.ZK_IP;
   try {
+    await markStaleAdmsDevices();
     if (!ip) throw new Error('ZK_IP no está configurada');
     const result = await testZktecoConnection();
     const device = await Device.findOne({ where: { ip } });

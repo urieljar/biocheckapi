@@ -1,13 +1,17 @@
 import express from 'express';
 import helmet from 'helmet';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { Employee, EmployeeProfile, Department, Position, Area, Attendance, Device, EmploymentPeriod, WorkSchedule, ScheduleDay, EmployeeSchedule } from '../models/index.js';
+import { Employee, EmployeeProfile, Department, Position, Area, Attendance, Device, DeviceCommand, EmploymentPeriod, WorkSchedule, ScheduleDay, EmployeeSchedule } from '../models/index.js';
 import { Op } from 'sequelize';
 import sequelize from '../config/database.js';
 import { calculateEmployeeAttendance, calculateBatchAttendance } from '../services/attendance-calculation.service.js';
 import { changeEmployment } from '../services/employee-lifecycle.service.js';
 import { recordAudit } from '../services/audit.service.js';
 import { logger } from '../services/logger.service.js';
+import { queueUpdateUserInfoCommand, queueDeleteUserCommand } from '../services/adms-command.service.js';
+import { writeEmployeeToDevice, deleteEmployeeFromDevice } from '../services/device-user-write.service.js';
+import { getZktecoAttendances, getZktecoUsers, testZktecoConnection } from '../services/zkteco.service.js';
+import { failSyncJob, finishSyncJob, getSyncJobsStatus, startSyncJob } from '../services/sync-status.service.js';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const invalid = (message) => Object.assign(new Error(message), { statusCode: 400 });
@@ -21,6 +25,60 @@ const date = (value) => {
   const parsed = new Date(`${value}T12:00:00Z`);
   if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) throw invalid('Fecha inválida');
   return parsed;
+};
+
+const CLOCK_ROLES = new Set([0, 2, 8, 12, 14]);
+export const validateExternalClockUser = (body = {}) => {
+  const text = (value, field, max) => {
+    if (typeof value !== 'string' || !value.trim() || value.trim().length > max) throw invalid(`${field} es obligatorio y admite máximo ${max} caracteres`);
+    if (/\r|\n|\t/.test(value)) throw invalid(`${field} contiene caracteres no permitidos`);
+    return value.trim();
+  };
+  const deviceUserId = text(body.deviceUserId, 'deviceUserId', 50);
+  const name = text(body.name, 'name', 160);
+  const deviceUid = Number(body.deviceUid);
+  const deviceRole = body.deviceRole === undefined ? 0 : Number(body.deviceRole);
+  if (!Number.isInteger(deviceUid) || deviceUid < 1 || deviceUid > 65535) throw invalid('deviceUid debe ser un entero entre 1 y 65535');
+  if (!Number.isInteger(deviceRole) || !CLOCK_ROLES.has(deviceRole)) throw invalid('deviceRole debe ser uno de: 0, 2, 8, 12 o 14');
+  const devicePin = body.devicePin === null || body.devicePin === undefined || body.devicePin === '' ? null : String(body.devicePin).trim();
+  if (devicePin && !/^\d{1,20}$/.test(devicePin)) throw invalid('devicePin debe contener solo números y máximo 20 dígitos');
+  const cardNumber = body.cardNumber === null || body.cardNumber === undefined || body.cardNumber === '' ? null : String(body.cardNumber).trim();
+  if (cardNumber && !/^\d{1,50}$/.test(cardNumber)) throw invalid('cardNumber debe contener solo dígitos y máximo 50 caracteres');
+  return { deviceUserId, deviceUid, name, deviceRole, devicePin, cardNumber };
+};
+
+// Contrato de lectura del reloj: el PIN solo se incluye cuando la ruta v3
+// privilegiada lo solicita explícitamente.
+export const externalClockUser = (user, { includePin = false } = {}) => ({
+  deviceUserId: String(user.userId),
+  deviceUid: Number(user.uid),
+  name: user.name || '',
+  deviceRole: Number(user.role || 0),
+  ...(includePin ? { devicePin: user.password || null } : {}),
+  cardNumber: user.cardno ? String(user.cardno) : null
+});
+
+export const externalDevice = (device) => ({
+  deviceId: device.id,
+  name: device.name,
+  ip: device.ip,
+  port: device.port,
+  serialNumber: device.serialNumber || null,
+  active: device.active === true,
+  admsStatus: device.admsStatus || 'UNKNOWN',
+  lastConnectionAt: device.lastConnectionAt || null,
+  lastAdmsAt: device.lastAdmsAt || null
+});
+
+export const verifyExternalClockUser = (users, deviceUserId, expected = 'EXISTS') => {
+  const user = users.find((item) => String(item.userId) === String(deviceUserId)) || null;
+  const existsInClock = Boolean(user);
+  return {
+    expected,
+    existsInClock,
+    verified: expected === 'ABSENT' ? !existsInClock : existsInClock,
+    user
+  };
 };
 
 // Contrato externo por lista de campos: no serializar modelos ni incidencias completas.
@@ -161,11 +219,13 @@ const employeeProfileInclude = {
   ]
 };
 
-export const createIntegrationApp = ({ keyHash = process.env.INTEGRATION_API_KEY_SHA256, writeKeyHash = process.env.INTEGRATION_WRITE_API_KEY_SHA256 || keyHash } = {}) => {
+export const createIntegrationApp = ({ keyHash = process.env.INTEGRATION_API_KEY_SHA256, writeKeyHash = process.env.INTEGRATION_WRITE_API_KEY_SHA256 || keyHash, v3KeyHash = process.env.INTEGRATION_V3_API_KEY_SHA256 || writeKeyHash } = {}) => {
   if (!/^[a-f0-9]{64}$/i.test(keyHash || '')) throw new Error('Configura INTEGRATION_API_KEY_SHA256 (SHA-256 hexadecimal)');
   if (!/^[a-f0-9]{64}$/i.test(writeKeyHash || '')) throw new Error('Configura INTEGRATION_WRITE_API_KEY_SHA256 (SHA-256 hexadecimal)');
+  if (!/^[a-f0-9]{64}$/i.test(v3KeyHash || '')) throw new Error('Configura INTEGRATION_V3_API_KEY_SHA256 (SHA-256 hexadecimal)');
   const expected = Buffer.from(keyHash, 'hex');
   const writeExpected = Buffer.from(writeKeyHash, 'hex');
+  const v3Expected = Buffer.from(v3KeyHash, 'hex');
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet());
@@ -175,8 +235,9 @@ export const createIntegrationApp = ({ keyHash = process.env.INTEGRATION_API_KEY
     const authorization = req.headers.authorization || '';
     const key = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
     const digest = createHash('sha256').update(key).digest();
-    const isWriteOperation = req.path.startsWith('/api/integrations/v2') && !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
-    const expectedKey = isWriteOperation ? writeExpected : expected;
+    const isV3 = req.path.startsWith('/api/integrations/v3');
+    const isV2Write = req.path.startsWith('/api/integrations/v2') && !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+    const expectedKey = isV3 ? v3Expected : isV2Write ? writeExpected : expected;
     if (!key || !timingSafeEqual(digest, expectedKey)) return res.status(401).json({ ok: false, message: 'Credencial de integración inválida' });
     next();
   });
@@ -547,9 +608,210 @@ export const createIntegrationApp = ({ keyHash = process.env.INTEGRATION_API_KEY
   app.post(`${writeBase}/employees/:employeeId/terminate`, employmentAction('terminate', 'Empleado dado de baja correctamente'));
   app.post(`${writeBase}/employees/:employeeId/reactivate`, employmentAction('rehire', 'Empleado reactivado correctamente'));
 
+  // v3: puente de reloj para sistemas externos. No crea Employee ni Profile;
+  // únicamente escribe el usuario solicitado en el dispositivo configurado.
+  const clockBase = '/api/integrations/v3';
+  app.get(`${clockBase}/devices`, async (_req, res) => {
+    const devices = await Device.findAll({ where: { active: true }, order: [['name', 'ASC'], ['id', 'ASC']] });
+    return res.json({ ok: true, data: devices.map(externalDevice), total: devices.length });
+  });
+
+  app.get(`${clockBase}/devices/:deviceId/status`, async (req, res) => {
+    if (!uuid.test(req.params.deviceId)) throw invalid('deviceId debe ser un UUID válido');
+    const device = await Device.findOne({ where: { id: req.params.deviceId, active: true } });
+    if (!device) throw Object.assign(new Error('Dispositivo activo no encontrado'), { statusCode: 404 });
+    return res.json({ ok: true, data: { ...externalDevice(device), tcp: { lastConnectionAt: device.lastConnectionAt || null }, adms: { status: device.admsStatus || 'UNKNOWN', lastConnectionAt: device.lastAdmsAt || null, lastError: device.admsLastError || null } } });
+  });
+
+  app.post(`${clockBase}/devices/:deviceId/test-connection`, async (req, res) => {
+    if (!uuid.test(req.params.deviceId)) throw invalid('deviceId debe ser un UUID válido');
+    const device = await Device.findOne({ where: { id: req.params.deviceId, active: true } });
+    if (!device) throw Object.assign(new Error('Dispositivo activo no encontrado'), { statusCode: 404 });
+    try {
+      const result = await testZktecoConnection(device);
+      const checkedAt = new Date();
+      await device.update({ lastConnectionAt: checkedAt });
+      return res.json({ ok: true, data: { deviceId: device.id, connected: true, transport: 'TCP', ip: result.ip, port: result.port, deviceTime: result.deviceTime, checkedAt } });
+    } catch (error) {
+      logger.warn('integration_v3_device_test_failed', { deviceId: device.id, error: error.message });
+      throw Object.assign(new Error('No fue posible conectar con el reloj por TCP'), { statusCode: 502 });
+    }
+  });
+
+  app.post(`${clockBase}/devices/:deviceId/attendances/sync`, async (req, res) => {
+    if (!uuid.test(req.params.deviceId)) throw invalid('deviceId debe ser un UUID válido');
+    const device = await Device.findOne({ where: { id: req.params.deviceId, active: true } });
+    if (!device) throw Object.assign(new Error('Dispositivo activo no encontrado'), { statusCode: 404 });
+    if (getSyncJobsStatus().attendances?.running) throw Object.assign(new Error('Ya hay una sincronización de checadas en curso'), { statusCode: 409 });
+    startSyncJob('attendances');
+    try {
+      // v3 es un puente directo: lee el reloj y entrega los datos al consumidor.
+      // No consulta ni escribe Employee/Attendance en PostgreSQL.
+      const clockRecords = await getZktecoAttendances(device);
+      const events = clockRecords.map((record) => ({
+        deviceId: device.id,
+        deviceUserId: String(record.deviceUserId ?? record.userId ?? ''),
+        deviceUserSn: Number.isFinite(Number(record.userSn)) ? Number(record.userSn) : null,
+        recordTime: record.recordTime ?? record.timestamp ?? null,
+        deviceIp: record.ip || device.ip,
+        source: 'CLOCK'
+      }));
+      const result = { received: events.length, events };
+      finishSyncJob('attendances', result);
+      return res.json({ ok: true, message: 'Checadas descargadas directamente del reloj', data: { deviceId: device.id, ...result, source: 'CLOCK', storedInBioCheck: false } });
+    } catch (error) {
+      failSyncJob('attendances', error);
+      logger.error('integration_v3_attendance_sync_failed', { deviceId: device.id, error: error.message });
+      throw Object.assign(new Error('No fue posible descargar las checadas del reloj'), { statusCode: 502 });
+    }
+  });
+
+  app.post(`${clockBase}/devices/:deviceId/clock-users`, async (req, res) => {
+    if (!uuid.test(req.params.deviceId)) throw invalid('deviceId debe ser un UUID válido');
+    const device = await Device.findOne({ where: { id: req.params.deviceId, active: true } });
+    if (!device) throw Object.assign(new Error('Dispositivo activo no encontrado'), { statusCode: 404 });
+    const clockUser = validateExternalClockUser(req.body);
+
+    // La lectura previa evita sobrescribir un usuario existente en el reloj.
+    const currentUsers = await getZktecoUsers(device);
+    if (currentUsers.some((user) => String(user.userId) === clockUser.deviceUserId)) {
+      throw Object.assign(new Error('Ya existe un usuario con ese deviceUserId en el reloj'), { statusCode: 409 });
+    }
+    if (currentUsers.some((user) => Number(user.uid) === clockUser.deviceUid)) {
+      throw Object.assign(new Error('Ya existe un usuario con ese deviceUid en el reloj'), { statusCode: 409 });
+    }
+
+    if (clockUser.deviceUserId.length > 8) {
+      const command = await queueUpdateUserInfoCommand({ device, employee: clockUser });
+      await recordAudit({
+        actorId: null, action: 'POST /v3/clock-users', category: 'INTEGRATION_V3_CLOCK', resourceType: 'DeviceCommand', resourceId: String(command.commandId),
+        method: req.method, path: req.originalUrl || req.path, statusCode: 202, success: true,
+        ipAddress: req.ip, userAgent: req.get('user-agent'), afterData: { deviceId: device.id, deviceUserId: clockUser.deviceUserId, deviceUid: clockUser.deviceUid, transport: 'ADMS', status: command.status },
+        metadata: { consumer: 'integration-v3', localEmployeeCreated: false }
+      });
+      return res.status(202).json({ ok: true, message: 'Usuario encolado para el reloj por ADMS', data: { deviceId: device.id, deviceUserId: clockUser.deviceUserId, deviceUid: clockUser.deviceUid, name: clockUser.name, deviceRole: clockUser.deviceRole, transport: 'ADMS', operationId: String(command.commandId), status: command.status, storedInBioCheckEmployees: false } });
+    }
+
+    await writeEmployeeToDevice(clockUser, { device });
+    const verifiedUsers = await getZktecoUsers(device);
+    const verified = verifiedUsers.some((user) => String(user.userId) === clockUser.deviceUserId && Number(user.uid) === clockUser.deviceUid);
+    if (!verified) throw Object.assign(new Error('El reloj no confirmó al usuario después de crearlo'), { statusCode: 502 });
+    await recordAudit({
+      actorId: null, action: 'POST /v3/clock-users', category: 'INTEGRATION_V3_CLOCK', resourceType: 'ClockUser', resourceId: `${device.id}:${clockUser.deviceUserId}`,
+      method: req.method, path: req.originalUrl || req.path, statusCode: 201, success: true,
+      ipAddress: req.ip, userAgent: req.get('user-agent'), afterData: { deviceId: device.id, deviceUserId: clockUser.deviceUserId, deviceUid: clockUser.deviceUid, transport: 'TCP', status: 'VERIFIED' },
+      metadata: { consumer: 'integration-v3', localEmployeeCreated: false }
+    });
+    return res.status(201).json({ ok: true, message: 'Usuario creado y verificado en el reloj', data: { deviceId: device.id, deviceUserId: clockUser.deviceUserId, deviceUid: clockUser.deviceUid, name: clockUser.name, deviceRole: clockUser.deviceRole, transport: 'TCP', status: 'VERIFIED', storedInBioCheckEmployees: false } });
+  });
+
+  const findClockUser = async (device, deviceUserId) => {
+    const users = await getZktecoUsers(device);
+    const user = users.find((item) => String(item.userId) === String(deviceUserId));
+    if (!user) throw Object.assign(new Error('Usuario no encontrado en el reloj'), { statusCode: 404 });
+    return user;
+  };
+  const updatePayload = (current, body = {}) => {
+    if (body.deviceUserId !== undefined || body.deviceUid !== undefined) throw invalid('deviceUserId y deviceUid no se modifican en esta ruta');
+    if (!['name', 'deviceRole', 'devicePin', 'cardNumber'].some((field) => body[field] !== undefined)) throw invalid('Envía name, deviceRole, devicePin o cardNumber');
+    const hasPassword = Object.prototype.hasOwnProperty.call(current, 'password');
+    const hasCard = Object.prototype.hasOwnProperty.call(current, 'cardno');
+    if (body.devicePin === undefined && !hasPassword) throw invalid('El reloj no devolvió PIN; envía devicePin para evitar sobrescribirlo');
+    if (body.cardNumber === undefined && !hasCard) throw invalid('El reloj no devolvió tarjeta; envía cardNumber para evitar sobrescribirla');
+    return validateExternalClockUser({
+      deviceUserId: String(current.userId), deviceUid: Number(current.uid),
+      name: body.name === undefined ? current.name : body.name,
+      deviceRole: body.deviceRole === undefined ? Number(current.role || 0) : body.deviceRole,
+      devicePin: body.devicePin === undefined ? (current.password || null) : body.devicePin,
+      cardNumber: body.cardNumber === undefined ? (current.cardno ? String(current.cardno) : null) : body.cardNumber
+    });
+  };
+
+  app.get(`${clockBase}/devices/:deviceId/clock-users`, async (req, res) => {
+    if (!uuid.test(req.params.deviceId)) throw invalid('deviceId debe ser un UUID válido');
+    const device = await Device.findOne({ where: { id: req.params.deviceId, active: true } });
+    if (!device) throw Object.assign(new Error('Dispositivo activo no encontrado'), { statusCode: 404 });
+    const users = await getZktecoUsers(device);
+    return res.json({ ok: true, data: users.map((user) => externalClockUser(user, { includePin: true })), total: users.length, source: 'CLOCK', storedInBioCheckEmployees: false });
+  });
+
+  app.get(`${clockBase}/devices/:deviceId/clock-users/:deviceUserId`, async (req, res) => {
+    if (!uuid.test(req.params.deviceId)) throw invalid('deviceId debe ser un UUID válido');
+    const device = await Device.findOne({ where: { id: req.params.deviceId, active: true } });
+    if (!device) throw Object.assign(new Error('Dispositivo activo no encontrado'), { statusCode: 404 });
+    const user = await findClockUser(device, req.params.deviceUserId);
+    return res.json({ ok: true, data: externalClockUser(user, { includePin: true }), source: 'CLOCK', storedInBioCheckEmployees: false });
+  });
+
+  app.post(`${clockBase}/devices/:deviceId/clock-users/verify`, async (req, res) => {
+    if (!uuid.test(req.params.deviceId)) throw invalid('deviceId debe ser un UUID válido');
+    const deviceUserId = typeof req.body?.deviceUserId === 'string' ? req.body.deviceUserId.trim() : '';
+    if (!deviceUserId || deviceUserId.length > 50 || /\r|\n|\t/.test(deviceUserId)) throw invalid('deviceUserId es obligatorio y debe ser válido');
+    const expected = String(req.body?.expected || 'EXISTS').toUpperCase();
+    if (!['EXISTS', 'ABSENT'].includes(expected)) throw invalid('expected debe ser EXISTS o ABSENT');
+    const device = await Device.findOne({ where: { id: req.params.deviceId, active: true } });
+    if (!device) throw Object.assign(new Error('Dispositivo activo no encontrado'), { statusCode: 404 });
+    const users = await getZktecoUsers(device);
+    const result = verifyExternalClockUser(users, deviceUserId, expected);
+    return res.json({
+      ok: true,
+      data: {
+        deviceId: device.id,
+        deviceUserId,
+        expected: result.expected,
+        existsInClock: result.existsInClock,
+        verified: result.verified,
+        user: result.user ? externalClockUser(result.user, { includePin: true }) : null,
+        checkedAt: new Date().toISOString()
+      },
+      source: 'CLOCK',
+      storedInBioCheckEmployees: false
+    });
+  });
+
+  app.patch(`${clockBase}/devices/:deviceId/clock-users/:deviceUserId`, async (req, res) => {
+    if (!uuid.test(req.params.deviceId)) throw invalid('deviceId debe ser un UUID válido');
+    const device = await Device.findOne({ where: { id: req.params.deviceId, active: true } });
+    if (!device) throw Object.assign(new Error('Dispositivo activo no encontrado'), { statusCode: 404 });
+    const current = await findClockUser(device, req.params.deviceUserId);
+    const clockUser = updatePayload(current, req.body);
+    if (clockUser.deviceUserId.length > 8) {
+      const command = await queueUpdateUserInfoCommand({ device, employee: clockUser });
+      return res.status(202).json({ ok: true, message: 'Actualización encolada por ADMS', data: { deviceId: device.id, deviceUserId: clockUser.deviceUserId, deviceUid: clockUser.deviceUid, transport: 'ADMS', operationId: String(command.commandId), status: command.status, storedInBioCheckEmployees: false } });
+    }
+    await writeEmployeeToDevice(clockUser, { device });
+    const verified = await findClockUser(device, clockUser.deviceUserId);
+    if (Number(verified.uid) !== clockUser.deviceUid || String(verified.name) !== clockUser.name) throw Object.assign(new Error('El reloj no confirmó los cambios solicitados'), { statusCode: 502 });
+    return res.json({ ok: true, message: 'Usuario actualizado y verificado en el reloj', data: { deviceId: device.id, deviceUserId: clockUser.deviceUserId, deviceUid: clockUser.deviceUid, transport: 'TCP', status: 'VERIFIED', storedInBioCheckEmployees: false } });
+  });
+
+  app.delete(`${clockBase}/devices/:deviceId/clock-users/:deviceUserId`, async (req, res) => {
+    if (!uuid.test(req.params.deviceId)) throw invalid('deviceId debe ser un UUID válido');
+    if (String(req.body?.confirmationDeviceUserId || '') !== String(req.params.deviceUserId)) throw invalid('Envía confirmationDeviceUserId igual al ID que deseas retirar');
+    const device = await Device.findOne({ where: { id: req.params.deviceId, active: true } });
+    if (!device) throw Object.assign(new Error('Dispositivo activo no encontrado'), { statusCode: 404 });
+    const current = await findClockUser(device, req.params.deviceUserId);
+    const clockUser = { deviceUserId: String(current.userId), deviceUid: Number(current.uid) };
+    if (clockUser.deviceUserId.length > 8) {
+      const command = await queueDeleteUserCommand({ device, employee: clockUser });
+      return res.status(202).json({ ok: true, message: 'Retiro encolado por ADMS. El reloj eliminará también sus biométricos.', data: { deviceId: device.id, deviceUserId: clockUser.deviceUserId, deviceUid: clockUser.deviceUid, transport: 'ADMS', operationId: String(command.commandId), status: command.status, storedInBioCheckEmployees: false } });
+    }
+    await deleteEmployeeFromDevice(clockUser, { device });
+    const usersAfter = await getZktecoUsers(device);
+    if (usersAfter.some((item) => String(item.userId) === clockUser.deviceUserId)) throw Object.assign(new Error('El reloj no confirmó el retiro del usuario'), { statusCode: 502 });
+    return res.json({ ok: true, message: 'Usuario retirado y verificado en el reloj. Sus biométricos fueron eliminados del dispositivo.', data: { deviceId: device.id, deviceUserId: clockUser.deviceUserId, deviceUid: clockUser.deviceUid, transport: 'TCP', status: 'VERIFIED', storedInBioCheckEmployees: false } });
+  });
+
+  app.get(`${clockBase}/device-operations/:operationId`, async (req, res) => {
+    if (!/^\d+$/.test(req.params.operationId)) throw invalid('operationId debe ser numérico');
+    const operation = await DeviceCommand.findByPk(req.params.operationId);
+    if (!operation || operation.employeeId) throw Object.assign(new Error('Operación externa no encontrada'), { statusCode: 404 });
+    res.json({ ok: true, data: { operationId: String(operation.commandId), deviceId: operation.deviceId, status: operation.status, transport: 'ADMS', attempts: operation.attemptCount, maxAttempts: operation.maxAttempts, error: operation.lastError || null, createdAt: operation.createdAt, sentAt: operation.sentAt, confirmedAt: operation.returnedAt } });
+  });
+
   app.use((_req, res) => res.status(404).json({ ok: false, message: 'Operación no disponible en la integración' }));
   app.use((error, req, res, _next) => {
-    const status = [400, 404].includes(error.statusCode) ? error.statusCode : 500;
+    const status = [400, 404, 409, 502].includes(error.statusCode) ? error.statusCode : 500;
     logger.error('integration_request_failed', { method: req.method, path: req.originalUrl, status, error: error.message });
     res.status(status).json({ ok: false, message: status === 500 ? 'No fue posible consultar la integración' : error.message });
   });

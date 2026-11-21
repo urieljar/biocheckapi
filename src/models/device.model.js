@@ -49,6 +49,25 @@ const Device = sequelize.define(
     lastConnectionAt: {
       type: DataTypes.DATE,
       allowNull: true
+    },
+
+    admsStatus: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'UNKNOWN',
+      validate: {
+        isIn: [['UNKNOWN', 'ONLINE', 'OFFLINE']]
+      }
+    },
+
+    lastAdmsAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+
+    admsLastError: {
+      type: DataTypes.TEXT,
+      allowNull: true
     }
   },
   {
